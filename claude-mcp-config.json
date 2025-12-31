@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "semantic-search": {
+      "command": "/Users/alhamzaaljamaly/GolandProjects/codebase-semantic-search-server/semantic-search",
+      "args": [],
+      "env": {
+        "OLLAMA_URL": "http://localhost:11434",
+        "QDRANT_HOST": "localhost",
+        "QDRANT_PORT": "6334"
+      },
+      "description": "Local semantic code search with embeddings and hybrid scoring",
+      "disabled": false
+    }
+  }
+}

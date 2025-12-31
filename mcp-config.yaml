@@ -1,0 +1,111 @@
+# MCP Server Configuration
+# Configuration for the Semantic Search MCP Server
+
+server:
+  name: "semantic-search"
+  version: "0.0.1"
+  description: "Local semantic code search with embeddings"
+
+# Chunking configuration
+chunking:
+  max_lines: 50           # Maximum lines per chunk (increased for better context)
+  overlap_lines: 10       # Lines overlap between chunks (increased for continuity)
+  respect_boundaries: true # Respect function/class boundaries
+
+# Indexing configuration
+indexing:
+  batch_size: 32          # Chunks per batch (increased for faster processing)
+  max_file_size_mb: 5     # Maximum file size in MB
+  parallel_workers: 8     # Number of parallel workers (reduced for stability)
+  background: false       # Run indexing in background (false for synchronous)
+  incremental: true       # Enable incremental indexing with file hashing
+
+# Search configuration
+search:
+  max_results: 10         # Maximum number of results to return (increased)
+  semantic_weight: 0.85   # Weight for semantic similarity (increased for better semantic matching)
+  exact_match_boost: 1.2  # Boost multiplier for exact matches (reduced to not override semantic)
+
+# Embeddings configuration
+embeddings:
+  model: "nomic-embed-text:latest"     # Ollama model name (explicit latest version)
+  ollama_url: "http://localhost:11434" # Ollama API endpoint
+  batch_size: 32                       # Embeddings per batch (increased for speed)
+  normalize: true                      # Normalize embeddings to unit vectors
+  dimensions: 768                      # Expected embedding dimensions
+
+# Vector database configuration
+vectordb:
+  type: "qdrant"              # Vector database type (currently only qdrant)
+  host: "localhost"           # Qdrant host
+  port: 6334                  # Qdrant gRPC port (NOT 6333)
+  collection_name: "code_chunks" # Qdrant collection name
+  distance_metric: "cosine"   # Distance metric (cosine, dot, euclidean)
+  vector_size: 768            # Must match embeddings.dimensions
+
+# Cache configuration
+cache:
+  directory: "~/.semantic-search/cache" # Cache directory for file hashes
+  enabled: true                         # Enable caching
+
+# Ignore patterns (similar to .gitignore)
+ignore:
+  patterns:
+    # Dependencies
+    - "node_modules/**"
+    - "vendor/**"
+    - ".pnp/**"
+    - ".pnp.js"
+
+    # Build outputs
+    - "build/**"
+    - "dist/**"
+    - "out/**"
+    - "target/**"
+    - "bin/**"
+    - ".next/**"
+    - ".nuxt/**"
+    - ".output/**"
+
+    # Version control
+    - ".git/**"
+    - ".svn/**"
+    - ".hg/**"
+
+    # IDE
+    - ".idea/**"
+    - ".vscode/**"
+    - "*.swp"
+    - "*.swo"
+    - "*~"
+
+    # Logs and temp files
+    - "*.log"
+    - "*.tmp"
+    - ".DS_Store"
+    - "Thumbs.db"
+
+    # Package files
+    - "*.jar"
+    - "*.war"
+    - "*.ear"
+    - "*.zip"
+    - "*.tar.gz"
+    - "*.rar"
+
+    # Compiled files
+    - "*.class"
+    - "*.o"
+    - "*.so"
+    - "*.dylib"
+    - "*.dll"
+    - "*.exe"
+
+    # Test coverage
+    - "coverage/**"
+    - ".nyc_output/**"
+    - "*.lcov"
+
+    # Documentation builds
+    - "docs/_build/**"
+    - "site/**"

@@ -1,0 +1,127 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+semantic-search
+test-search
+index-tool
+test-indexer
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.out
+*.coverprofile
+
+# Go workspace file
+go.work
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# IDE - VSCode
+.vscode/
+*.code-workspace
+
+# IDE - IntelliJ / GoLand
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# IDE - Vim
+*.swp
+*.swo
+*~
+
+# IDE - Emacs
+*~
+\#*\#
+.\#*
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Claude Code local settings
+.claude/
+.claude.json
+
+# Logs
+*.log
+logs/
+*.log.*
+/tmp/
+/temp/
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+
+# Local configuration
+config.local.yaml
+mcp-config.local.yaml
+*_local.yaml
+*_local.json
+
+# Docker volumes (local data)
+qdrant_storage/
+ollama_data/
+
+# Build artifacts
+dist/
+build/
+bin/
+*.tar.gz
+*.zip
+
+# Cache directories
+.cache/
+*.cache
+
+# Database files (if any)
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Node modules (if any frontend tools)
+node_modules/
+
+# Python (if any scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+
+# Local test repositories (don't commit test data)
+test-repos/
+sample-repos/
+
+# Personal notes
+NOTES.md
+TODO.md
+scratch.md

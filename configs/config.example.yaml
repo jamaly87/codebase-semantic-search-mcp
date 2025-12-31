@@ -1,0 +1,90 @@
+# Semantic Search Server Configuration
+# Copy this file to ~/.semantic-search/config.yaml or config.yaml
+
+server:
+  name: "semantic-search"
+  version: "0.0.1"
+
+# Code chunking configuration
+chunking:
+  max_lines: 25                    # Maximum lines per chunk
+  overlap_lines: 5                 # Lines of overlap between chunks
+  respect_boundaries: true         # Don't split functions mid-way
+
+# Indexing configuration
+indexing:
+  batch_size: 100                  # Number of files to process in parallel
+  max_file_size_mb: 1              # Skip files larger than this (in MB)
+  parallel_workers: 0              # Number of workers (0 = auto-detect CPU cores)
+  background: true                 # Index in background (non-blocking)
+  incremental: true                # Only reindex changed files
+
+# Search configuration
+search:
+  max_results: 5                   # Maximum number of results to return
+  semantic_weight: 0.7             # Weight for semantic similarity (0.0-1.0)
+  exact_match_boost: 1.5           # Multiplier for exact keyword matches
+  min_score_threshold: 0.5         # Minimum score to include in results
+
+# Embeddings configuration
+embeddings:
+  model: "nomic-embed-text"        # Ollama model name
+  ollama_url: "http://localhost:11434"
+  batch_size: 16                   # Number of chunks to embed at once
+  dimensions: 768                  # Embedding dimensions (nomic-embed-text)
+  context_length: 8192             # Maximum context length
+  normalize: true                  # L2 normalize embeddings
+
+# Vector database configuration
+vectordb:
+  type: "embedded"                 # "embedded" or "remote"
+  collection_name: "code_chunks"
+  distance_metric: "cosine"        # "cosine", "dot", or "euclidean"
+  vector_size: 768                 # Must match embeddings.dimensions
+  on_disk_payload: true            # Store payload on disk to save memory
+
+# Cache configuration
+cache:
+  enabled: true
+  directory: "~/.semantic-search/cache"
+  embeddings_file: "embeddings.db"
+  hashes_file: "file-hashes.json"
+
+# Patterns to ignore during indexing
+ignore_patterns:
+  patterns:
+    # Build outputs
+    - "target/**"           # Java (Maven)
+    - "build/**"            # Java (Gradle)
+    - "dist/**"             # TypeScript/JavaScript
+    - "out/**"              # General
+
+    # Dependencies
+    - "node_modules/**"     # JavaScript/TypeScript
+    - ".pnp/**"             # Yarn
+
+    # Generated code
+    - "**/*.min.js"
+    - "**/*.bundle.js"
+
+    # Version control
+    - ".git/**"
+
+    # IDE
+    - ".idea/**"            # IntelliJ
+    - ".vscode/**"
+    - "*.iml"
+
+# Supported programming languages
+supported_languages:
+  java:
+    extensions: [".java"]
+    parser: "tree-sitter-java"
+
+  typescript:
+    extensions: [".ts", ".tsx"]
+    parser: "tree-sitter-typescript"
+
+  javascript:
+    extensions: [".js", ".jsx", ".mjs", ".cjs"]
+    parser: "tree-sitter-javascript"
