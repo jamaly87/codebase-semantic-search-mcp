@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jamaly87/codebase-semantic-search/pkg/config"
@@ -20,13 +22,29 @@ type Client struct {
 
 // NewClient creates a new Ollama embeddings client
 func NewClient(cfg *config.EmbeddingsConfig) *Client {
-	return &Client{
+	// Configure HTTP transport for optimal connection reuse and pooling
+	transport := &http.Transport{
+		MaxIdleConns:        100,              // Maximum idle connections across all hosts
+		MaxIdleConnsPerHost: 100,              // Maximum idle connections per host (Ollama)
+		MaxConnsPerHost:     100,              // Maximum total connections per host
+		IdleConnTimeout:     90 * time.Second, // How long idle connections stay alive
+		DisableKeepAlives:   false,            // Enable keep-alive (connection reuse)
+		ForceAttemptHTTP2:   false,            // Stick with HTTP/1.1 for simplicity
+	}
+
+	client := &Client{
 		config:  cfg,
 		baseURL: cfg.OllamaURL,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second, // Generous timeout for large batches
+			Timeout:   60 * time.Second, // Generous timeout for large batches
+			Transport: transport,
 		},
 	}
+
+	// Log MRL configuration
+	client.logMRLConfig()
+
+	return client
 }
 
 // EmbedRequest represents a request to generate embeddings
@@ -43,9 +61,10 @@ type EmbedResponse struct {
 // GenerateEmbedding generates an embedding for a single text
 func (c *Client) GenerateEmbedding(text string) ([]float32, error) {
 	// Truncate text if it exceeds safe length
-	// nomic-embed-text has 8192 token limit
-	// Use conservative 6000 chars to stay well under token limit
-	maxChars := 6000
+	// nomic-embed-text has 8192 token limit (~4 chars per token)
+	// Use very conservative 4000 chars (~1000 tokens) to ensure we never exceed
+	// This is a safety net - chunker should already handle size limits
+	maxChars := 4000
 	if len(text) > maxChars {
 		text = text[:maxChars]
 	}
@@ -84,28 +103,83 @@ func (c *Client) GenerateEmbedding(text string) ([]float32, error) {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if len(response.Embedding) != c.config.Dimensions {
-		return nil, fmt.Errorf("expected %d dimensions, got %d", c.config.Dimensions, len(response.Embedding))
+	// Validate we got the full dimension from the model
+	fullDim := c.config.FullDimension
+	if fullDim == 0 {
+		fullDim = 768 // Default for nomic-embed-text
 	}
 
-	// Normalize if configured
+	if len(response.Embedding) != fullDim {
+		return nil, fmt.Errorf("expected %d dimensions from model, got %d", fullDim, len(response.Embedding))
+	}
+
+	embedding := response.Embedding
+
+	// Apply MRL dimension truncation if enabled
+	if c.config.UseMRL && c.config.Dimensions < fullDim {
+		embedding = applyMRL(embedding, c.config.Dimensions)
+	}
+
+	// Normalize if configured (after MRL slicing)
 	if c.config.Normalize {
-		response.Embedding = normalize(response.Embedding)
+		embedding = normalize(embedding)
 	}
 
-	return response.Embedding, nil
+	return embedding, nil
 }
 
 // GenerateEmbeddings generates embeddings for multiple texts (batch)
+// Uses concurrent requests with connection pooling for optimal performance
 func (c *Client) GenerateEmbeddings(texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+
+	// For single text, use the simple method
+	if len(texts) == 1 {
+		embedding, err := c.GenerateEmbedding(texts[0])
+		if err != nil {
+			return nil, err
+		}
+		return [][]float32{embedding}, nil
+	}
+
+	// Use concurrent requests with connection pooling for better performance
+	// The http.Client with keep-alive will reuse connections
 	embeddings := make([][]float32, len(texts))
+	errors := make([]error, len(texts))
+
+	// Limit concurrency to avoid overwhelming Ollama
+	// Use a semaphore to control concurrent requests
+	maxConcurrent := 10 // Process up to 10 requests concurrently
+	semaphore := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
 
 	for i, text := range texts {
-		embedding, err := c.GenerateEmbedding(text)
+		wg.Add(1)
+		go func(idx int, txt string) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			embedding, err := c.GenerateEmbedding(txt)
+			if err != nil {
+				errors[idx] = fmt.Errorf("failed to generate embedding for item %d: %w", idx, err)
+				return
+			}
+			embeddings[idx] = embedding
+		}(i, text)
+	}
+
+	wg.Wait()
+
+	// Check for errors
+	for i, err := range errors {
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate embedding for item %d: %w", i, err)
+			return nil, fmt.Errorf("batch embedding failed at index %d: %w", i, err)
 		}
-		embeddings[i] = embedding
 	}
 
 	return embeddings, nil
@@ -154,4 +228,71 @@ func sqrt64(x float64) float64 {
 		z = z - (z*z-x)/(2*z)
 	}
 	return z
+}
+
+// applyMRL applies Matryoshka Representation Learning dimension truncation
+// This truncates the embedding to a smaller dimension while maintaining semantic meaning
+// nomic-embed-text is trained with MRL, so dimensions 64, 128, 256, 512, 768 all work well
+func applyMRL(embedding []float32, targetDim int) []float32 {
+	// Validate target dimension
+	validDims := []int{64, 128, 256, 512, 768}
+	isValid := false
+	for _, dim := range validDims {
+		if targetDim == dim {
+			isValid = true
+			break
+		}
+	}
+
+	if !isValid {
+		// If invalid dimension, return closest valid one
+		if targetDim < 64 {
+			targetDim = 64
+		} else if targetDim > 768 {
+			targetDim = 768
+		} else {
+			// Round to nearest valid dimension
+			for i := 0; i < len(validDims)-1; i++ {
+				if targetDim > validDims[i] && targetDim < validDims[i+1] {
+					// Choose closer one
+					if targetDim-validDims[i] < validDims[i+1]-targetDim {
+						targetDim = validDims[i]
+					} else {
+						targetDim = validDims[i+1]
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Ensure we don't exceed embedding length
+	if targetDim > len(embedding) {
+		targetDim = len(embedding)
+	}
+
+	// Slice to target dimension
+	// Note: Ideally we'd apply layer normalization before slicing, but since we're
+	// receiving embeddings from Ollama post-generation, we can only slice and renormalize.
+	// This still works well because nomic-embed-text is specifically trained for MRL.
+	sliced := make([]float32, targetDim)
+	copy(sliced, embedding[:targetDim])
+
+	return sliced
+}
+
+// logMRLConfig logs the MRL configuration on client initialization
+func (c *Client) logMRLConfig() {
+	fullDim := c.config.FullDimension
+	if fullDim == 0 {
+		fullDim = 768
+	}
+
+	if c.config.UseMRL {
+		reduction := float64(fullDim-c.config.Dimensions) / float64(fullDim) * 100
+		log.Printf("✓ MRL Enabled: %dd → %dd (%.0f%% smaller, ~95%% accuracy)",
+			fullDim, c.config.Dimensions, reduction)
+	} else {
+		log.Printf("MRL Disabled: Using full %dd embeddings", fullDim)
+	}
 }

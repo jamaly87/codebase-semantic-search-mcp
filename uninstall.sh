@@ -43,20 +43,31 @@ stop_services() {
     echo -e "${BLUE}🐳 Stopping Docker services...${NC}"
 
     local stopped=false
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
     # Try to find and use docker-compose.yml from common locations
     local compose_locations=(
+        "$script_dir/docker-compose.yml"
         "$CONFIG_DIR/docker-compose.yml"
-        "docker-compose.yml"
         "$PWD/docker-compose.yml"
     )
 
     for compose_file in "${compose_locations[@]}"; do
         if [ -f "$compose_file" ]; then
             local compose_dir=$(dirname "$compose_file")
-            echo "   Trying docker-compose in $compose_dir..."
-            if (cd "$compose_dir" && docker-compose down 2>/dev/null); then
-                echo -e "${GREEN}   ✓ Stopped containers via docker-compose${NC}"
+            local project_name=$(basename "$compose_dir")
+
+            echo "   Found docker-compose.yml in $compose_dir"
+            echo "   Running docker-compose down with project: $project_name..."
+
+            # Try with explicit project name first
+            if (cd "$compose_dir" && docker-compose -p "$project_name" down -v 2>/dev/null); then
+                echo -e "${GREEN}   ✓ Stopped and removed containers via docker-compose${NC}"
+                stopped=true
+                break
+            # Try without project name
+            elif (cd "$compose_dir" && docker-compose down -v 2>/dev/null); then
+                echo -e "${GREEN}   ✓ Stopped and removed containers via docker-compose${NC}"
                 stopped=true
                 break
             fi
@@ -65,7 +76,7 @@ stop_services() {
 
     # If docker-compose didn't work, try manual stop
     if [ "$stopped" = false ]; then
-        echo -e "${YELLOW}   ⚠ docker-compose not found, stopping containers manually...${NC}"
+        echo -e "${YELLOW}   ⚠ docker-compose not found or failed, stopping containers manually...${NC}"
         stop_containers_manually
     fi
 
@@ -76,14 +87,26 @@ stop_services() {
 stop_containers_manually() {
     local containers_found=false
 
-    # Only stop Qdrant container (Ollama runs natively)
-    for container in semantic-search-qdrant; do
-        if docker ps -a --format '{{.Names}}' | grep -q "^${container}$"; then
-            containers_found=true
-            echo "   Stopping $container..."
-            docker stop "$container" 2>/dev/null || true
-            docker rm "$container" 2>/dev/null || true
-            echo -e "${GREEN}   ✓ Removed container: $container${NC}"
+    # Find all containers related to semantic-search or codebase-semantic-search
+    local container_patterns=(
+        "semantic-search"
+        "codebase-semantic-search"
+    )
+
+    for pattern in "${container_patterns[@]}"; do
+        # Find containers matching the pattern
+        local matching_containers=$(docker ps -a --format '{{.Names}}' | grep "$pattern" 2>/dev/null || true)
+
+        if [ -n "$matching_containers" ]; then
+            while IFS= read -r container; do
+                if [ -n "$container" ]; then
+                    containers_found=true
+                    echo "   Stopping $container..."
+                    docker stop "$container" 2>/dev/null || true
+                    docker rm "$container" 2>/dev/null || true
+                    echo -e "${GREEN}   ✓ Removed container: $container${NC}"
+                fi
+            done <<< "$matching_containers"
         fi
     done
 
@@ -150,24 +173,62 @@ remove_volumes() {
 remove_images() {
     echo -e "${BLUE}🗑️  Removing Docker images...${NC}"
 
-    # Check if Qdrant image exists
-    local qdrant_exists=$(docker images -q qdrant/qdrant 2>/dev/null)
+    # Find all related images (Qdrant, project-specific, etc.)
+    local all_images=""
 
-    if [ -z "$qdrant_exists" ]; then
-        echo -e "${YELLOW}   ⊘ No Qdrant Docker image found${NC}"
+    # Find Qdrant images (including all tags)
+    local qdrant_images=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "^qdrant/qdrant:" 2>/dev/null || true)
+
+    # Find project-specific images (codebase-semantic-search, semantic-search)
+    local project_images=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "semantic-search|codebase-semantic-search" 2>/dev/null || true)
+
+    # Combine all images
+    all_images=$(echo -e "${qdrant_images}\n${project_images}" | grep -v '^$' | sort -u)
+
+    if [ -z "$all_images" ]; then
+        echo -e "${YELLOW}   ⊘ No Docker images found${NC}"
         echo ""
         return
     fi
 
-    echo -e "${YELLOW}⚠️  This will remove Qdrant Docker image (you can re-download it later).${NC}"
-    echo "   • qdrant/qdrant (~200MB)"
+    echo -e "${YELLOW}⚠️  This will remove the following Docker image(s):${NC}"
+    echo "   Found images:"
+    echo "$all_images" | while read -r image; do
+        if [ -n "$image" ]; then
+            echo "   • $image"
+        fi
+    done
     echo ""
-    read -p "Remove Docker image? (y/N): " -n 1 -r
+    read -p "Remove Docker image(s)? (y/N): " -n 1 -r
     echo ""
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        docker rmi qdrant/qdrant 2>/dev/null || true
-        echo -e "${GREEN}   ✓ Removed qdrant/qdrant${NC}"
+        local images_removed=0
+        local images_failed=0
+
+        echo "$all_images" | while read -r image; do
+            if [ -n "$image" ]; then
+                echo "   Removing $image..."
+                if docker rmi -f "$image" 2>/dev/null; then
+                    echo -e "${GREEN}   ✓ Removed $image${NC}"
+                    ((images_removed++))
+                else
+                    echo -e "${RED}   ✗ Failed to remove $image${NC}"
+                    ((images_failed++))
+                fi
+            fi
+        done
+
+        # Also try to remove untagged/dangling images
+        local dangling=$(docker images -f "dangling=true" -q 2>/dev/null | head -20)
+        if [ -n "$dangling" ]; then
+            echo "   Checking for dangling images..."
+            for img_id in $dangling; do
+                docker rmi -f "$img_id" 2>/dev/null && echo -e "${GREEN}   ✓ Removed dangling image $img_id${NC}" || true
+            done
+        fi
+
+        echo -e "${GREEN}   ✓ Image removal complete${NC}"
     else
         echo -e "${YELLOW}   ⊘ Skipped image removal${NC}"
     fi
@@ -313,8 +374,23 @@ verify_cleanup() {
         all_clean=false
     fi
 
-    if docker ps -a --format '{{.Names}}' | grep -q "semantic-search"; then
-        echo -e "${YELLOW}   ⚠ Docker containers still exist${NC}"
+    # Check for any remaining containers with semantic-search or codebase-semantic-search in name
+    local remaining_containers=$(docker ps -a --format '{{.Names}}' | grep -E "semantic-search|codebase-semantic-search" 2>/dev/null || true)
+    if [ -n "$remaining_containers" ]; then
+        echo -e "${YELLOW}   ⚠ Docker containers still exist:${NC}"
+        echo "$remaining_containers" | while read -r container; do
+            echo "      • $container"
+        done
+        all_clean=false
+    fi
+
+    # Check for any remaining images
+    local remaining_images=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "semantic-search|codebase-semantic-search|qdrant/qdrant" 2>/dev/null || true)
+    if [ -n "$remaining_images" ]; then
+        echo -e "${YELLOW}   ⚠ Docker images still exist:${NC}"
+        echo "$remaining_images" | while read -r image; do
+            echo "      • $image"
+        done
         all_clean=false
     fi
 

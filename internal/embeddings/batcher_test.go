@@ -18,6 +18,18 @@ func (m *mockClient) GenerateEmbedding(text string) ([]float32, error) {
 	return []float32{float32(len(text)), 0.5, 0.3}, nil
 }
 
+func (m *mockClient) GenerateEmbeddings(texts []string) ([][]float32, error) {
+	embeddings := make([][]float32, len(texts))
+	for i, text := range texts {
+		embedding, err := m.GenerateEmbedding(text)
+		if err != nil {
+			return nil, err
+		}
+		embeddings[i] = embedding
+	}
+	return embeddings, nil
+}
+
 func TestBatchCreation(t *testing.T) {
 	tests := []struct {
 		name          string
