@@ -18,6 +18,7 @@ type Config struct {
 	Embeddings  EmbeddingsConfig  `yaml:"embeddings"`
 	VectorDB    VectorDBConfig    `yaml:"vectordb"`
 	Cache       CacheConfig       `yaml:"cache"`
+	Logging     LoggingConfig     `yaml:"logging"`
 	Ignore      IgnoreConfig      `yaml:"ignore_patterns"`
 	Languages   LanguagesConfig   `yaml:"supported_languages"`
 }
@@ -49,12 +50,14 @@ type SearchConfig struct {
 }
 
 type EmbeddingsConfig struct {
-	Model       string `yaml:"model"`
-	OllamaURL   string `yaml:"ollama_url"`
-	BatchSize   int    `yaml:"batch_size"`
-	Dimensions  int    `yaml:"dimensions"`
-	ContextLength int  `yaml:"context_length"`
-	Normalize   bool   `yaml:"normalize"`
+	Model         string `yaml:"model"`
+	OllamaURL     string `yaml:"ollama_url"`
+	BatchSize     int    `yaml:"batch_size"`
+	Dimensions    int    `yaml:"dimensions"`     // Target MRL dimension (64, 128, 256, 512, 768)
+	FullDimension int    `yaml:"full_dimension"` // Full embedding dimension from model (768 for nomic)
+	ContextLength int    `yaml:"context_length"`
+	Normalize     bool   `yaml:"normalize"`
+	UseMRL        bool   `yaml:"use_mrl"` // Enable MRL dimension truncation
 }
 
 type VectorDBConfig struct {
@@ -70,6 +73,15 @@ type CacheConfig struct {
 	Directory       string `yaml:"directory"`
 	EmbeddingsFile  string `yaml:"embeddings_file"`
 	HashesFile      string `yaml:"hashes_file"`
+}
+
+type LoggingConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Directory  string `yaml:"directory"`
+	MaxSizeMB  int    `yaml:"max_size_mb"`
+	MaxBackups int    `yaml:"max_backups"`
+	MaxAgeDays int    `yaml:"max_age_days"`
+	Compress   bool   `yaml:"compress"`
 }
 
 type IgnoreConfig struct {
@@ -102,8 +114,9 @@ func Load() (*Config, error) {
 	// Override with environment variables
 	applyEnvOverrides(cfg)
 
-	// Expand home directory in cache path
+	// Expand home directory in paths
 	cfg.Cache.Directory = expandPath(cfg.Cache.Directory)
+	cfg.Logging.Directory = expandPath(cfg.Logging.Directory)
 
 	return cfg, nil
 }
@@ -137,15 +150,17 @@ func DefaultConfig() *Config {
 			Model:         "nomic-embed-text",
 			OllamaURL:     "http://localhost:11434",
 			BatchSize:     16,
-			Dimensions:    768,
+			Dimensions:    256,  // MRL target dimension (3x smaller, ~95% accuracy)
+			FullDimension: 768,  // Full dimension from nomic-embed-text
 			ContextLength: 8192,
 			Normalize:     true,
+			UseMRL:        true, // Enable MRL truncation
 		},
 		VectorDB: VectorDBConfig{
 			Type:           "embedded",
 			CollectionName: "code_chunks",
 			DistanceMetric: "cosine",
-			VectorSize:     768,
+			VectorSize:     256,  // Match MRL dimension
 			OnDiskPayload:  true,
 		},
 		Cache: CacheConfig{
@@ -153,6 +168,14 @@ func DefaultConfig() *Config {
 			Directory:      "~/.semantic-search/cache",
 			EmbeddingsFile: "embeddings.db",
 			HashesFile:     "file-hashes.json",
+		},
+		Logging: LoggingConfig{
+			Enabled:    true,
+			Directory:  "~/.semantic-search/logs",
+			MaxSizeMB:  10,
+			MaxBackups: 5,
+			MaxAgeDays: 30,
+			Compress:   true,
 		},
 		Ignore: IgnoreConfig{
 			Patterns: []string{

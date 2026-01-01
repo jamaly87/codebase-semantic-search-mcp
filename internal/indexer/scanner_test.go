@@ -118,12 +118,12 @@ func TestIgnorePatterns(t *testing.T) {
 
 	// Verify ignored paths are not included
 	for _, file := range result.Files {
-		if contains(file, "node_modules") ||
-			contains(file, "build") ||
-			contains(file, ".git") ||
-			contains(file, "vendor") ||
-			contains(file, "dist") ||
-			contains(file, "target") {
+		if pathContainsDir(file, "node_modules") ||
+			pathContainsDir(file, "build") ||
+			pathContainsDir(file, ".git") ||
+			pathContainsDir(file, "vendor") ||
+			pathContainsDir(file, "dist") ||
+			pathContainsDir(file, "target") {
 			t.Errorf("Ignored file found: %s", file)
 		}
 	}
@@ -312,8 +312,8 @@ func TestIgnoreMatcher(t *testing.T) {
 	}
 }
 
-// Helper function
-func contains(s, substr string) bool {
+// Helper function to check if a file path contains a directory name
+func pathContainsDir(s, substr string) bool {
 	return filepath.Base(filepath.Dir(s)) == substr ||
 		filepath.Base(s) == substr ||
 		len(filepath.SplitList(s)) > 0 && filepath.SplitList(s)[0] == substr

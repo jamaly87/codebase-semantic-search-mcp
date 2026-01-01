@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -138,6 +139,16 @@ func (s *Server) handleIndexCodebase(ctx context.Context, args map[string]interf
 	forceReindex := false
 	if fr, ok := args["force_reindex"].(bool); ok {
 		forceReindex = fr
+	}
+
+	// Check if cache is inconsistent with Qdrant (cache says indexed but Qdrant has no chunks)
+	if !forceReindex {
+		repoIndex, err := s.indexer.GetRepoIndex(repoPath)
+		if err == nil && repoIndex.TotalChunks == 0 && repoIndex.TotalFiles > 0 {
+			// Cache says files are indexed but Qdrant has no chunks - force reindex
+			log.Printf("Detected cache inconsistency: cache has files but Qdrant has no chunks. Forcing reindex...")
+			forceReindex = true
+		}
 	}
 
 	// Start indexing

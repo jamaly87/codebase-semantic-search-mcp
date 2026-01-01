@@ -12,6 +12,7 @@ import (
 // EmbeddingGenerator interface for generating embeddings
 type EmbeddingGenerator interface {
 	GenerateEmbedding(text string) ([]float32, error)
+	GenerateEmbeddings(texts []string) ([][]float32, error)
 }
 
 // Batcher handles batch processing of embeddings
@@ -91,25 +92,28 @@ func (b *Batcher) ProcessChunks(chunks []models.CodeChunk) ([]models.CodeChunk, 
 	return allChunks, nil
 }
 
-// processBatch processes a single batch of chunks
+// processBatch processes a single batch of chunks using batch embedding generation
 func (b *Batcher) processBatch(chunks []models.CodeChunk, batchIdx int) ([]models.CodeChunk, error) {
 	log.Printf("Processing batch %d with %d chunks...", batchIdx, len(chunks))
 
+	// Extract all texts from chunks
+	texts := make([]string, len(chunks))
 	for i := range chunks {
-		// Generate embedding for chunk content
-		embedding, err := b.client.GenerateEmbedding(chunks[i].Content)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate embedding for chunk %s: %w", chunks[i].ID, err)
-		}
-
-		chunks[i].Embedding = embedding
-
-		// Log progress for large batches
-		if (i+1)%10 == 0 && len(chunks) > 20 {
-			progress := float64(i+1) / float64(len(chunks)) * 100
-			log.Printf("Batch %d: %.1f%% complete (%d/%d)", batchIdx, progress, i+1, len(chunks))
-		}
+		texts[i] = chunks[i].Content
 	}
+
+	// Generate embeddings for all chunks in this batch using concurrent requests
+	embeddings, err := b.client.GenerateEmbeddings(texts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate embeddings for batch %d: %w", batchIdx, err)
+	}
+
+	// Assign embeddings back to chunks
+	for i := range chunks {
+		chunks[i].Embedding = embeddings[i]
+	}
+
+	log.Printf("Batch %d: 100%% complete (%d/%d chunks processed)", batchIdx, len(chunks), len(chunks))
 
 	return chunks, nil
 }
