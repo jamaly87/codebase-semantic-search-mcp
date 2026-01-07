@@ -55,6 +55,7 @@ func NewChunker(cfg *config.ChunkingConfig) *Chunker {
 //   2. Token-aware (fallback for all languages) - 60-75% accuracy
 //
 // File-level chunks are REMOVED entirely to prevent context length errors
+// Uses adaptive chunking based on file size for optimal chunk granularity
 func (c *Chunker) ChunkFile(repoPath, filePath string) ([]models.CodeChunk, error) {
 	// Detect language
 	lang, ok := c.langDetector.Detect(filePath)
@@ -73,13 +74,22 @@ func (c *Chunker) ChunkFile(repoPath, filePath string) ([]models.CodeChunk, erro
 		return nil, nil // Skip empty files
 	}
 
+	// Calculate file size in lines for adaptive chunking
+	fileLines := strings.Count(fileContent, "\n") + 1
+	maxTokens, overlapTokens := c.calculateOptimalChunkSize(fileLines)
+
+	// Update token chunker limits for this file
+	if err := c.tokenChunker.SetLimits(maxTokens, overlapTokens); err != nil {
+		log.Printf("Warning: Failed to update token chunker limits: %v", err)
+	}
+
 	var chunks []models.CodeChunk
 
 	// Strategy 1: Try AST-based chunking (highest accuracy)
 	if c.astChunker != nil && c.astChunker.CanParseLanguage(lang.Name) {
-		astChunks, err := c.astChunker.ChunkByAST(repoPath, filePath, lang.Name, fileContent)
+		astChunks, err := c.astChunker.ChunkByAST(repoPath, filePath, lang.Name, fileContent, c.config)
 		if err == nil && len(astChunks) > 0 {
-			log.Printf("✓ AST chunking: %s (%d chunks)", filePath, len(astChunks))
+			log.Printf("✓ AST chunking: %s (%d chunks, %d lines)", filePath, len(astChunks), fileLines)
 			return astChunks, nil
 		}
 		// If AST parsing failed, fall through to token-based
@@ -95,12 +105,37 @@ func (c *Chunker) ChunkFile(repoPath, filePath string) ([]models.CodeChunk, erro
 	}
 
 	if len(tokenChunks) > 0 {
-		log.Printf("✓ Token chunking: %s (%d chunks)", filePath, len(tokenChunks))
+		log.Printf("✓ Token chunking: %s (%d chunks, %d lines, %d tokens/chunk)", filePath, len(tokenChunks), fileLines, maxTokens)
 	}
 
 	chunks = append(chunks, tokenChunks...)
 
 	return chunks, nil
+}
+
+// calculateOptimalChunkSize determines optimal chunk size based on file size
+// Returns maxTokens and overlapTokens for the token chunker
+func (c *Chunker) calculateOptimalChunkSize(fileLines int) (maxTokens, overlapTokens int) {
+	// Use adaptive chunking if configured, otherwise use defaults
+	if c.config.SmallFileMaxTokens > 0 {
+		switch {
+		case fileLines < 1000:
+			maxTokens = c.config.SmallFileMaxTokens
+			overlapTokens = maxTokens / 15 // ~6.7% overlap
+		case fileLines < 5000:
+			maxTokens = c.config.MediumFileMaxTokens
+			overlapTokens = maxTokens / 10 // ~10% overlap
+		default:
+			maxTokens = c.config.LargeFileMaxTokens
+			overlapTokens = maxTokens / 7 // ~14% overlap (more overlap for large files)
+		}
+	} else {
+		// Default values if not configured
+		maxTokens = 200
+		overlapTokens = 20
+	}
+
+	return maxTokens, overlapTokens
 }
 
 // GetStats returns statistics about chunking

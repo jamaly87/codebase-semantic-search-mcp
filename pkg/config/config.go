@@ -32,6 +32,13 @@ type ChunkingConfig struct {
 	MaxLines           int  `yaml:"max_lines"`
 	OverlapLines       int  `yaml:"overlap_lines"`
 	RespectBoundaries  bool `yaml:"respect_boundaries"`
+	// Adaptive chunking: different token limits based on file size
+	SmallFileMaxTokens int  `yaml:"small_file_max_tokens"` // Files < 1000 lines
+	MediumFileMaxTokens int  `yaml:"medium_file_max_tokens"` // Files 1000-5000 lines
+	LargeFileMaxTokens  int  `yaml:"large_file_max_tokens"`  // Files > 5000 lines
+	// Hierarchical chunking: split large classes/interfaces
+	EnableHierarchicalChunking bool `yaml:"enable_hierarchical_chunking"`
+	MaxChunkSizeBytes          int  `yaml:"max_chunk_size_bytes"` // Max size before splitting
 }
 
 type IndexingConfig struct {
@@ -129,9 +136,14 @@ func DefaultConfig() *Config {
 			Version: "0.0.1",
 		},
 		Chunking: ChunkingConfig{
-			MaxLines:          25,
-			OverlapLines:      5,
-			RespectBoundaries: true,
+			MaxLines:           25,
+			OverlapLines:       5,
+			RespectBoundaries:  true,
+			SmallFileMaxTokens: 300,  // ~1200 chars
+			MediumFileMaxTokens: 200, // ~800 chars
+			LargeFileMaxTokens:  150, // ~600 chars
+			EnableHierarchicalChunking: true,
+			MaxChunkSizeBytes:          4000, // 4KB before splitting
 		},
 		Indexing: IndexingConfig{
 			BatchSize:       100,

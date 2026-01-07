@@ -14,6 +14,7 @@ type CodeChunk struct {
 	EndLine      int                    `json:"end_line"`
 	FunctionName string                 `json:"function_name,omitempty"`
 	ClassName    string                 `json:"class_name,omitempty"`
+	ParentChunkID string                 `json:"parent_chunk_id,omitempty"` // For hierarchical chunking
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 	Embedding    []float32              `json:"embedding,omitempty"`
 	IndexedAt    time.Time              `json:"indexed_at"`
@@ -25,6 +26,8 @@ type ChunkType string
 const (
 	ChunkTypeFunction ChunkType = "function"
 	ChunkTypeFile     ChunkType = "file"
+	ChunkTypeClass    ChunkType = "class"    // Class/interface summary chunk
+	ChunkTypeMethod   ChunkType = "method"   // Method within a class
 )
 
 // SearchResult represents a search result with score
