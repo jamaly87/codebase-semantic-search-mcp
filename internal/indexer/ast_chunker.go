@@ -26,18 +26,18 @@ const (
 	nodeTypeJavaEnum          = "enum_declaration"
 	nodeTypeJavaMethod        = "method_declaration"
 	nodeTypeJavaConstructor   = "constructor_declaration"
-	
+
 	// JavaScript/TypeScript node types
 	nodeTypeJSFunction        = "function_declaration"
 	nodeTypeJSClass           = "class_declaration"
 	nodeTypeJSMethod          = "method_definition"
 	nodeTypeJSArrowFunction   = "arrow_function"
 	nodeTypeJSFunctionExpr    = "function_expression"
-	
+
 	// TypeScript-specific node types
 	nodeTypeTSInterface       = "interface_declaration"
 	nodeTypeTSTypeAlias       = "type_alias_declaration"
-	
+
 	// Common identifier node types
 	nodeTypeIdentifier        = "identifier"
 	nodeTypeName              = "name"
@@ -294,7 +294,7 @@ func (ac *ASTChunker) createChunkFromNode(node *sitter.Node, repoPath, filePath,
 		nodeTypeJSClass,
 		nodeTypeTSInterface,
 	}
-	
+
 	functionNodeTypes := []string{
 		nodeTypeJSFunction,
 		nodeTypeJavaMethod,
@@ -303,7 +303,7 @@ func (ac *ASTChunker) createChunkFromNode(node *sitter.Node, repoPath, filePath,
 		nodeTypeJSArrowFunction,
 		nodeTypeJSFunctionExpr,
 	}
-	
+
 	switch {
 	case contains(classNodeTypes, nodeType):
 		chunk.ClassName = name
@@ -395,7 +395,7 @@ func (ac *ASTChunker) isLargeClassOrInterface(node *sitter.Node, nodeType string
 		nodeTypeJSClass,
 		nodeTypeTSInterface,
 	}
-	
+
 	if !contains(classNodeTypes, nodeType) {
 		return false
 	}
@@ -481,7 +481,7 @@ func (ac *ASTChunker) createClassSummary(node *sitter.Node, content string, lang
 	// Extract class signature (first ~20 lines or until first method)
 	classContent := content[startByte:endByte]
 	lines := strings.Split(classContent, "\n")
-	
+
 	// Find first method/constructor to determine where signature ends
 	signatureEnd := len(lines)
 	for i, line := range lines {
