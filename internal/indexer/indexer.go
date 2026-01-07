@@ -136,7 +136,7 @@ func (idx *Indexer) doIndex(job *models.IndexJob, forceReindex bool) {
 
 	job.ChunksTotal = len(allChunks)
 
-	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), processedFiles)
+	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), job.FilesIndexed)
 
 	// Phase 3: Generate embeddings
 	if len(allChunks) > 0 {
@@ -301,7 +301,8 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 	// Wait for chunk collection to finish
 	<-done
 
-	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), processedFiles)
+	finalProcessed := atomic.LoadInt64(&processedFiles)
+	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), finalProcessed)
 	return allChunks
 }
 
