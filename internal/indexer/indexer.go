@@ -214,18 +214,19 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 
 	// Worker pool
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, numWorkers)
 
 	// Start workers
+	log.Printf("[%s] Starting %d workers for parallel processing", job.ID, numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
+			log.Printf("[%s] Worker %d started", job.ID, workerID)
 
+			fileCount := 0
 			for filePath := range fileChan {
-				// Acquire semaphore
-				semaphore <- struct{}{}
-				defer func() { <-semaphore }()
+				fileCount++
+				log.Printf("[%s] Worker %d: Processing file %d: %s", job.ID, workerID, fileCount, filePath)
 
 				// Check if file needs reindexing
 				if !forceReindex && idx.config.Indexing.Incremental {
@@ -234,6 +235,7 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 						log.Printf("[%s] Warning: Failed to check hash for %s: %v", job.ID, filePath, err)
 					} else if !needsReindex {
 						// Skip file, it hasn't changed
+						log.Printf("[%s] Worker %d: Skipping unchanged file %s", job.ID, workerID, filePath)
 						atomic.AddInt64(&processedFiles, 1)
 						current := atomic.LoadInt64(&processedFiles)
 						job.FilesIndexed = int(current)
@@ -243,6 +245,7 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 				}
 
 				// Chunk file
+				log.Printf("[%s] Worker %d: Chunking file %s", job.ID, workerID, filePath)
 				chunks, err := idx.chunker.ChunkFile(job.RepoPath, filePath)
 				if err != nil {
 					log.Printf("[%s] Warning: Failed to chunk %s: %v", job.ID, filePath, err)
@@ -252,6 +255,7 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 					job.Progress = float64(current) / float64(job.FilesTotal)
 					continue
 				}
+				log.Printf("[%s] Worker %d: Generated %d chunks from %s", job.ID, workerID, len(chunks), filePath)
 
 				// Add timestamp to chunks
 				now := time.Now()
@@ -260,7 +264,9 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 				}
 
 				// Send chunks to channel
+				log.Printf("[%s] Worker %d: Sending %d chunks to channel", job.ID, workerID, len(chunks))
 				chunkChan <- chunks
+				log.Printf("[%s] Worker %d: Sent chunks to channel", job.ID, workerID)
 
 				// Update hash cache
 				if idx.config.Indexing.Incremental {
@@ -275,31 +281,44 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 				job.FilesIndexed = int(current)
 				job.Progress = float64(current) / float64(job.FilesTotal)
 
-				if current%100 == 0 {
+				if current%10 == 0 || current == 1 {
 					log.Printf("[%s] Progress: %d/%d files (%.1f%%)",
 						job.ID, current, job.FilesTotal, job.Progress*100)
 				}
+				
+				log.Printf("[%s] Worker %d: Completed processing %s", job.ID, workerID, filePath)
 			}
+			log.Printf("[%s] Worker %d: Finished processing all files (processed %d files)", job.ID, workerID, fileCount)
 		}(i)
 	}
 
 	// Collect chunks in a separate goroutine
 	done := make(chan bool)
+	chunkCount := int64(0)
 	go func() {
+		log.Printf("[%s] Chunk collector goroutine started", job.ID)
 		for chunks := range chunkChan {
+			receivedCount := atomic.AddInt64(&chunkCount, int64(len(chunks)))
+			log.Printf("[%s] Chunk collector: Received %d chunks (total: %d)", job.ID, len(chunks), receivedCount)
 			chunksMux.Lock()
 			allChunks = append(allChunks, chunks...)
 			chunksMux.Unlock()
+			log.Printf("[%s] Chunk collector: Added chunks to list (total chunks: %d)", job.ID, len(allChunks))
 		}
+		log.Printf("[%s] Chunk collector: Channel closed, finished collecting", job.ID)
 		done <- true
 	}()
 
 	// Wait for all workers to finish
+	log.Printf("[%s] Waiting for all %d workers to finish...", job.ID, numWorkers)
 	wg.Wait()
+	log.Printf("[%s] All workers finished, closing chunk channel", job.ID)
 	close(chunkChan)
 
 	// Wait for chunk collection to finish
+	log.Printf("[%s] Waiting for chunk collector to finish...", job.ID)
 	<-done
+	log.Printf("[%s] Chunk collector finished", job.ID)
 
 	finalProcessed := atomic.LoadInt64(&processedFiles)
 	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), finalProcessed)

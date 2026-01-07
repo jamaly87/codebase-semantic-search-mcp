@@ -5,6 +5,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jamaly87/codebase-semantic-search/internal/models"
@@ -47,8 +48,10 @@ const (
 )
 
 // ASTChunker extracts semantic chunks using Tree-sitter AST parsing
+// Tree-sitter parsers are NOT thread-safe, so all operations must be protected by a mutex
 type ASTChunker struct {
 	parsers map[string]*sitter.Parser
+	mux     sync.Mutex // Protects parser access (Tree-sitter parsers are not thread-safe)
 }
 
 // NewASTChunker creates a new AST-based chunker with language parsers
@@ -85,19 +88,26 @@ func (ac *ASTChunker) initializeParsers() {
 
 // ChunkByAST extracts semantic chunks (functions, classes, methods) using AST
 // Supports hierarchical chunking for large classes/interfaces
+// Thread-safe: uses mutex to protect Tree-sitter parser access
 func (ac *ASTChunker) ChunkByAST(repoPath, filePath, language, content string, cfg *config.ChunkingConfig) ([]models.CodeChunk, error) {
+	ac.mux.Lock()
 	parser, err := ac.getParser(language)
 	if err != nil {
+		ac.mux.Unlock()
 		return nil, fmt.Errorf("parser not available for %s: %w", language, err)
 	}
 
-	// Parse the code
+	// Parse the code (Tree-sitter parsers are NOT thread-safe)
+	// We can release the lock after parsing since we're working with the tree, not the parser
 	tree := parser.Parse(nil, []byte(content))
+	ac.mux.Unlock()
+
 	if tree == nil {
 		return nil, fmt.Errorf("failed to parse file")
 	}
 
 	// Extract semantic nodes with hierarchical chunking if enabled
+	// Tree operations are safe to do without the lock
 	chunks := ac.extractSemanticNodes(tree, repoPath, filePath, language, content, cfg)
 
 	return chunks, nil

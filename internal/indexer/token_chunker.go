@@ -36,12 +36,25 @@ func NewTokenChunker(maxTokens, overlap int) (*TokenChunker, error) {
 }
 
 // ChunkByTokens splits content into token-aware chunks with smart boundaries
+// Uses the current limits set via SetLimits
 func (tc *TokenChunker) ChunkByTokens(repoPath, filePath, language, content string) ([]models.CodeChunk, error) {
 	// Get current limits (thread-safe)
 	tc.mux.RLock()
 	maxTokens := tc.maxTokens
 	overlap := tc.overlap
 	tc.mux.RUnlock()
+
+	return tc.chunkWithLimits(repoPath, filePath, language, content, maxTokens, overlap)
+}
+
+// ChunkByTokensWithLimits splits content into token-aware chunks with specified limits
+// Thread-safe: uses provided limits instead of shared state
+func (tc *TokenChunker) ChunkByTokensWithLimits(repoPath, filePath, language, content string, maxTokens, overlap int) ([]models.CodeChunk, error) {
+	return tc.chunkWithLimits(repoPath, filePath, language, content, maxTokens, overlap)
+}
+
+// chunkWithLimits is the internal implementation that does the actual chunking
+func (tc *TokenChunker) chunkWithLimits(repoPath, filePath, language, content string, maxTokens, overlap int) ([]models.CodeChunk, error) {
 
 	// Split content into lines for boundary detection
 	lines := strings.Split(content, "\n")

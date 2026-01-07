@@ -78,11 +78,6 @@ func (c *Chunker) ChunkFile(repoPath, filePath string) ([]models.CodeChunk, erro
 	fileLines := strings.Count(fileContent, "\n") + 1
 	maxTokens, overlapTokens := c.calculateOptimalChunkSize(fileLines)
 
-	// Update token chunker limits for this file
-	if err := c.tokenChunker.SetLimits(maxTokens, overlapTokens); err != nil {
-		log.Printf("Warning: Failed to update token chunker limits: %v", err)
-	}
-
 	var chunks []models.CodeChunk
 
 	// Strategy 1: Try AST-based chunking (highest accuracy)
@@ -99,7 +94,8 @@ func (c *Chunker) ChunkFile(repoPath, filePath string) ([]models.CodeChunk, erro
 	}
 
 	// Strategy 2: Token-aware chunking (fallback for all languages)
-	tokenChunks, err := c.tokenChunker.ChunkByTokens(repoPath, filePath, lang.Name, fileContent)
+	// Pass limits directly to avoid race conditions from SetLimits
+	tokenChunks, err := c.tokenChunker.ChunkByTokensWithLimits(repoPath, filePath, lang.Name, fileContent, maxTokens, overlapTokens)
 	if err != nil {
 		return nil, fmt.Errorf("token chunking failed: %w", err)
 	}
