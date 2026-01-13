@@ -136,7 +136,8 @@ func (idx *Indexer) doIndex(job *models.IndexJob, forceReindex bool) {
 
 	job.ChunksTotal = len(allChunks)
 
-	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), job.FilesIndexed)
+	filesIndexed, _ := job.GetProgress()
+	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), filesIndexed)
 
 	// Phase 3: Generate embeddings
 	if len(allChunks) > 0 {
@@ -238,8 +239,7 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 						log.Printf("[%s] Worker %d: Skipping unchanged file %s", job.ID, workerID, filePath)
 						atomic.AddInt64(&processedFiles, 1)
 						current := atomic.LoadInt64(&processedFiles)
-						job.FilesIndexed = int(current)
-						job.Progress = float64(current) / float64(job.FilesTotal)
+						job.UpdateProgress(int(current), float64(current)/float64(job.FilesTotal))
 						continue
 					}
 				}
@@ -251,8 +251,7 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 					log.Printf("[%s] Warning: Failed to chunk %s: %v", job.ID, filePath, err)
 					atomic.AddInt64(&processedFiles, 1)
 					current := atomic.LoadInt64(&processedFiles)
-					job.FilesIndexed = int(current)
-					job.Progress = float64(current) / float64(job.FilesTotal)
+					job.UpdateProgress(int(current), float64(current)/float64(job.FilesTotal))
 					continue
 				}
 				log.Printf("[%s] Worker %d: Generated %d chunks from %s", job.ID, workerID, len(chunks), filePath)
@@ -278,12 +277,12 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 				// Update progress
 				atomic.AddInt64(&processedFiles, 1)
 				current := atomic.LoadInt64(&processedFiles)
-				job.FilesIndexed = int(current)
-				job.Progress = float64(current) / float64(job.FilesTotal)
+				job.UpdateProgress(int(current), float64(current)/float64(job.FilesTotal))
 
 				if current%10 == 0 || current == 1 {
+					_, progress := job.GetProgress()
 					log.Printf("[%s] Progress: %d/%d files (%.1f%%)",
-						job.ID, current, job.FilesTotal, job.Progress*100)
+						job.ID, current, job.FilesTotal, progress*100)
 				}
 				
 				log.Printf("[%s] Worker %d: Completed processing %s", job.ID, workerID, filePath)
@@ -347,9 +346,10 @@ func (idx *Indexer) GetRepoIndex(repoPath string) (*models.RepoIndex, error) {
 	for _, job := range idx.jobs {
 		if job.RepoPath == repoPath && job.Status == models.IndexStatusRunning {
 			idx.jobsMux.RUnlock()
+			filesIndexed, _ := job.GetProgress()
 			return &models.RepoIndex{
 				RepoPath:    repoPath,
-				TotalFiles:  job.FilesIndexed,
+				TotalFiles:  filesIndexed,
 				TotalChunks: job.ChunksTotal,
 				Languages:   make(map[string]int),
 				LastIndexed: job.StartTime,
