@@ -6,7 +6,7 @@ import (
 )
 
 func TestTokenChunker_SetLimits(t *testing.T) {
-	chunker, err := NewTokenChunker(200, 20)
+	chunker, err := NewTokenChunker(200, 20, 4000)
 	if err != nil {
 		t.Fatalf("Failed to create token chunker: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestTokenChunker_SetLimits(t *testing.T) {
 }
 
 func TestTokenChunker_SetLimits_Invalid(t *testing.T) {
-	chunker, err := NewTokenChunker(200, 20)
+	chunker, err := NewTokenChunker(200, 20, 4000)
 	if err != nil {
 		t.Fatalf("Failed to create token chunker: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestTokenChunker_SetLimits_Invalid(t *testing.T) {
 }
 
 func TestTokenChunker_AdaptiveChunking(t *testing.T) {
-	chunker, err := NewTokenChunker(200, 20)
+	chunker, err := NewTokenChunker(200, 20, 4000)
 	if err != nil {
 		t.Fatalf("Failed to create token chunker: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestTokenChunker_AdaptiveChunking(t *testing.T) {
 }
 
 func TestTokenChunker_OverlapCalculation(t *testing.T) {
-	chunker, err := NewTokenChunker(200, 20)
+	chunker, err := NewTokenChunker(200, 20, 4000)
 	if err != nil {
 		t.Fatalf("Failed to create token chunker: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestTokenChunker_OverlapCalculation(t *testing.T) {
 }
 
 func TestTokenChunker_EmptyContent(t *testing.T) {
-	chunker, err := NewTokenChunker(200, 20)
+	chunker, err := NewTokenChunker(200, 20, 4000)
 	if err != nil {
 		t.Fatalf("Failed to create token chunker: %v", err)
 	}

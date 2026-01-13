@@ -29,7 +29,12 @@ func NewChunker(cfg *config.ChunkingConfig) *Chunker {
 	// Create token-based chunker (fallback strategy)
 	// maxTokens: ~200 tokens per chunk (conservative for nomic-embed-text's 8192 limit)
 	// overlap: ~20 tokens to maintain context
-	tokenChunker, err := NewTokenChunker(200, 20)
+	// maxChunkSizeBytes: use configured value or default to 4000
+	maxChunkSizeBytes := cfg.MaxChunkSizeBytes
+	if maxChunkSizeBytes == 0 {
+		maxChunkSizeBytes = 4000 // Default if not configured
+	}
+	tokenChunker, err := NewTokenChunker(200, 20, maxChunkSizeBytes)
 	if err != nil {
 		log.Fatalf("Failed to create token chunker: %v", err)
 	}

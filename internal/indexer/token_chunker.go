@@ -13,14 +13,15 @@ import (
 
 // TokenChunker splits code into chunks based on token count (model-aware)
 type TokenChunker struct {
-	tokenizer *tiktoken.Tiktoken
-	maxTokens int
-	overlap   int
-	mux       sync.RWMutex // For thread-safe limit updates
+	tokenizer         *tiktoken.Tiktoken
+	maxTokens         int
+	overlap           int
+	maxChunkSizeBytes int          // Max chunk size in bytes before truncation
+	mux               sync.RWMutex // For thread-safe limit updates
 }
 
 // NewTokenChunker creates a new token-based chunker
-func NewTokenChunker(maxTokens, overlap int) (*TokenChunker, error) {
+func NewTokenChunker(maxTokens, overlap, maxChunkSizeBytes int) (*TokenChunker, error) {
 	// Use cl100k_base encoding (used by gpt-3.5-turbo and gpt-4)
 	// This is compatible with most modern LLMs
 	tokenizer, err := tiktoken.GetEncoding("cl100k_base")
@@ -29,9 +30,10 @@ func NewTokenChunker(maxTokens, overlap int) (*TokenChunker, error) {
 	}
 
 	return &TokenChunker{
-		tokenizer: tokenizer,
-		maxTokens: maxTokens,
-		overlap:   overlap,
+		tokenizer:         tokenizer,
+		maxTokens:         maxTokens,
+		overlap:           overlap,
+		maxChunkSizeBytes: maxChunkSizeBytes,
 	}, nil
 }
 
@@ -131,10 +133,9 @@ func (tc *TokenChunker) createChunk(repoPath, filePath, language string, lines [
 		return nil
 	}
 
-	// Ensure chunk doesn't exceed safe size (4000 chars ~ 1000 tokens)
-	const maxChunkSize = 4000
-	if len(content) > maxChunkSize {
-		content = content[:maxChunkSize]
+	// Ensure chunk doesn't exceed configured max size
+	if len(content) > tc.maxChunkSizeBytes {
+		content = content[:tc.maxChunkSizeBytes]
 	}
 
 	return &models.CodeChunk{
