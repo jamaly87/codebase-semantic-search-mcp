@@ -621,8 +621,15 @@ func (ac *ASTChunker) splitLargeChunk(chunk *models.CodeChunk, fullContent strin
 	lines := strings.Split(chunk.Content, "\n")
 	currentChunk := strings.Builder{}
 	currentStartLine := chunk.StartLine
-	overlapLines := 3 // Keep 3 lines of overlap
 
+	// Determine overlap lines proportionally to the chunk size:
+	// use ~10% of total lines, with at least 1 and at most 10 lines of overlap.
+	overlapLines := len(lines) / 10
+	if overlapLines < 1 {
+		overlapLines = 1
+	} else if overlapLines > 10 {
+		overlapLines = 10
+	}
 	for i, line := range lines {
 		currentChunk.WriteString(line)
 		currentChunk.WriteString("\n")
