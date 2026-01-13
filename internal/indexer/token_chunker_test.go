@@ -198,7 +198,7 @@ func TestTokenChunker_OverlapWithLargeLine(t *testing.T) {
 	maxAllowed := int(float64(10) * maxOverlapExcessRatio)
 	if actualTokens > maxAllowed && len(overlapLines) > 1 {
 		// If we have more than one line AND we exceeded the threshold, that's a problem
-		t.Logf("Warning: Overlap tokens (%d) exceeded threshold (max %d) with %d lines", actualTokens, maxAllowed, len(overlapLines))
+		t.Errorf("Overlap tokens (%d) exceeded threshold (max %d) with %d lines", actualTokens, maxAllowed, len(overlapLines))
 	}
 }
 
