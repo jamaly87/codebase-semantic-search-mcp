@@ -60,15 +60,17 @@ stop_services() {
             echo "   Found docker-compose.yml in $compose_dir"
             echo "   Running docker-compose down with project: $project_name..."
 
-            # Try with explicit project name first
+            # Try with explicit project name first, then without
             if (cd "$compose_dir" && docker-compose -p "$project_name" down -v 2>/dev/null); then
                 echo -e "${GREEN}   ✓ Stopped and removed containers via docker-compose${NC}"
                 stopped=true
-                break
             # Try without project name
             elif (cd "$compose_dir" && docker-compose down -v 2>/dev/null); then
                 echo -e "${GREEN}   ✓ Stopped and removed containers via docker-compose${NC}"
                 stopped=true
+            fi
+
+            if [ "$stopped" = true ]; then
                 break
             fi
         fi
