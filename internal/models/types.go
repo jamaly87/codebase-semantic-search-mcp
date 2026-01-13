@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // CodeChunk represents a chunk of code stored in the vector database
 type CodeChunk struct {
@@ -63,6 +66,7 @@ const (
 
 // IndexJob represents a background indexing job
 type IndexJob struct {
+	mu           sync.Mutex    // protects FilesIndexed and Progress
 	ID           string        `json:"id"`
 	RepoPath     string        `json:"repo_path"`
 	Status       IndexStatus   `json:"status"`
@@ -73,6 +77,21 @@ type IndexJob struct {
 	FilesIndexed int           `json:"files_indexed"`
 	ChunksTotal  int           `json:"chunks_total"`
 	Error        string        `json:"error,omitempty"`
+}
+
+// UpdateProgress safely updates the FilesIndexed and Progress fields
+func (j *IndexJob) UpdateProgress(filesIndexed int, progress float64) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.FilesIndexed = filesIndexed
+	j.Progress = progress
+}
+
+// GetProgress safely retrieves the current progress values
+func (j *IndexJob) GetProgress() (filesIndexed int, progress float64) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.FilesIndexed, j.Progress
 }
 
 // FileHash tracks file hashes for incremental indexing
