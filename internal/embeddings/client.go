@@ -169,10 +169,11 @@ func (c *Client) GenerateEmbeddings(texts []string) ([][]float32, error) {
 			// Acquire semaphore with context cancellation check
 			select {
 			case semaphore <- struct{}{}:
-				defer func() { <-semaphore }()
 			case <-ctx.Done():
 				return
 			}
+			// Always release semaphore after successful acquisition
+			defer func() { <-semaphore }()
 
 			embedding, err := c.GenerateEmbedding(txt)
 			if err != nil {
