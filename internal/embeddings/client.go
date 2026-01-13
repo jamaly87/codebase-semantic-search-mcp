@@ -175,6 +175,13 @@ func (c *Client) GenerateEmbeddings(texts []string) ([][]float32, error) {
 			// Always release semaphore after successful acquisition
 			defer func() { <-semaphore }()
 
+			// Check context again before starting expensive work
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			embedding, err := c.GenerateEmbedding(txt)
 			if err != nil {
 				errors[idx] = fmt.Errorf("failed to generate embedding for item %d: %w", idx, err)
