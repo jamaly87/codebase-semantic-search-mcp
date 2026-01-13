@@ -11,6 +11,11 @@ import (
 	"github.com/pkoukk/tiktoken-go"
 )
 
+const (
+	// maxOverlapExcessRatio defines the maximum allowed excess for overlap as a ratio (1.2 = 20% excess)
+	maxOverlapExcessRatio = 1.2
+)
+
 // TokenChunker splits code into chunks based on token count (model-aware)
 type TokenChunker struct {
 	tokenizer *tiktoken.Tiktoken
@@ -167,12 +172,13 @@ func (tc *TokenChunker) calculateOverlapLines(lines []string, overlapTokens int)
 		// Check if adding this line would exceed the overlap limit
 		if currentOverlap+lineTokens > overlapTokens {
 			// Only add if we haven't collected any overlap yet (ensure at least one line)
-			// or if the excess is within a reasonable threshold (20% of target)
+			// or if the excess is within a reasonable threshold
 			if len(overlapLines) == 0 {
 				// Always include at least one line to ensure some overlap exists
 				overlapLines = append([]string{line}, overlapLines...)
-			} else if currentOverlap+lineTokens <= overlapTokens*12/10 {
-				// Allow up to 20% excess (12/10 = 1.2)
+				currentOverlap += lineTokens
+			} else if float64(currentOverlap+lineTokens) <= float64(overlapTokens)*maxOverlapExcessRatio {
+				// Allow up to maxOverlapExcessRatio excess (default 20%)
 				overlapLines = append([]string{line}, overlapLines...)
 				currentOverlap += lineTokens
 			}

@@ -143,13 +143,15 @@ func TestTokenChunker_OverlapCalculation(t *testing.T) {
 
 	// Verify that overlap doesn't significantly exceed the requested token count
 	actualTokens1 := chunker.countTokens(strings.Join(overlapLines1, "\n"))
-	if actualTokens1 > 10*12/10 { // Allow 20% excess (12/10 = 1.2)
-		t.Errorf("Overlap tokens (%d) should not significantly exceed requested tokens (10), max allowed is %d", actualTokens1, 10*12/10)
+	maxAllowed1 := int(float64(10) * maxOverlapExcessRatio)
+	if actualTokens1 > maxAllowed1 {
+		t.Errorf("Overlap tokens (%d) should not significantly exceed requested tokens (10), max allowed is %d", actualTokens1, maxAllowed1)
 	}
 
 	actualTokens2 := chunker.countTokens(strings.Join(overlapLines2, "\n"))
-	if actualTokens2 > 50*12/10 { // Allow 20% excess
-		t.Errorf("Overlap tokens (%d) should not significantly exceed requested tokens (50), max allowed is %d", actualTokens2, 50*12/10)
+	maxAllowed2 := int(float64(50) * maxOverlapExcessRatio)
+	if actualTokens2 > maxAllowed2 {
+		t.Errorf("Overlap tokens (%d) should not significantly exceed requested tokens (50), max allowed is %d", actualTokens2, maxAllowed2)
 	}
 }
 
@@ -193,9 +195,10 @@ func TestTokenChunker_OverlapWithLargeLine(t *testing.T) {
 	// The overlap should not be excessive - in this case it should be just the last line
 	// since adding the second-to-last line would exceed the 20% threshold
 	actualTokens := chunker.countTokens(strings.Join(overlapLines, "\n"))
-	if actualTokens > 10*12/10 && len(overlapLines) > 1 {
+	maxAllowed := int(float64(10) * maxOverlapExcessRatio)
+	if actualTokens > maxAllowed && len(overlapLines) > 1 {
 		// If we have more than one line AND we exceeded the threshold, that's a problem
-		t.Logf("Warning: Overlap tokens (%d) exceeded 20%% threshold with %d lines", actualTokens, len(overlapLines))
+		t.Logf("Warning: Overlap tokens (%d) exceeded threshold (max %d) with %d lines", actualTokens, maxAllowed, len(overlapLines))
 	}
 }
 
