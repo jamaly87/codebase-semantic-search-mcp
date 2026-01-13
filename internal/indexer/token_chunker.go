@@ -4,10 +4,20 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jamaly87/codebase-semantic-search/internal/models"
 	"github.com/pkoukk/tiktoken-go"
+)
+
+const (
+	// maxOverlapExcessRatio defines the maximum allowed excess for overlap as a ratio (1.2 = 20% excess)
+	maxOverlapExcessRatio = 1.2
+	// maxChunkSizeBytes is the maximum safe chunk size in bytes (~4000 chars ~ 1000 tokens)
+	maxChunkSizeBytes = 4000
+	// boundaryLookaheadLines is the number of lines to look ahead when searching for natural boundaries
+	boundaryLookaheadLines = 10
 )
 
 // TokenChunker splits code into chunks based on token count (model-aware)
@@ -15,6 +25,7 @@ type TokenChunker struct {
 	tokenizer *tiktoken.Tiktoken
 	maxTokens int
 	overlap   int
+	mux       sync.RWMutex // For thread-safe limit updates
 }
 
 // NewTokenChunker creates a new token-based chunker
@@ -34,7 +45,26 @@ func NewTokenChunker(maxTokens, overlap int) (*TokenChunker, error) {
 }
 
 // ChunkByTokens splits content into token-aware chunks with smart boundaries
+// Uses the current limits set via SetLimits
 func (tc *TokenChunker) ChunkByTokens(repoPath, filePath, language, content string) ([]models.CodeChunk, error) {
+	// Get current limits (thread-safe)
+	tc.mux.RLock()
+	maxTokens := tc.maxTokens
+	overlap := tc.overlap
+	tc.mux.RUnlock()
+
+	return tc.chunkWithLimits(repoPath, filePath, language, content, maxTokens, overlap)
+}
+
+// ChunkByTokensWithLimits splits content into token-aware chunks with specified limits
+// Thread-safe: uses provided limits instead of shared state
+func (tc *TokenChunker) ChunkByTokensWithLimits(repoPath, filePath, language, content string, maxTokens, overlap int) ([]models.CodeChunk, error) {
+	return tc.chunkWithLimits(repoPath, filePath, language, content, maxTokens, overlap)
+}
+
+// chunkWithLimits is the internal implementation that does the actual chunking
+func (tc *TokenChunker) chunkWithLimits(repoPath, filePath, language, content string, maxTokens, overlap int) ([]models.CodeChunk, error) {
+
 	// Split content into lines for boundary detection
 	lines := strings.Split(content, "\n")
 
@@ -50,10 +80,10 @@ func (tc *TokenChunker) ChunkByTokens(repoPath, filePath, language, content stri
 		lineTokens := len(tc.tokenizer.Encode(line, nil, nil))
 
 		// Check if adding this line would exceed max tokens
-		if currentTokens+lineTokens > tc.maxTokens && len(currentLines) > 0 {
-			// Look ahead for a natural boundary within next 10 lines
+		if currentTokens+lineTokens > maxTokens && len(currentLines) > 0 {
+			// Look ahead for a natural boundary within next N lines
 			boundaryFound := false
-			for j := i; j < i+10 && j < len(lines); j++ {
+			for j := i; j < i+boundaryLookaheadLines && j < len(lines); j++ {
 				trimmed := strings.TrimSpace(lines[j])
 				if IsBoundary(trimmed, language) {
 					// Found a boundary, extend to there
@@ -74,7 +104,7 @@ func (tc *TokenChunker) ChunkByTokens(repoPath, filePath, language, content stri
 			}
 
 			// Create overlap for next chunk
-			overlapLines := tc.calculateOverlapLines(currentLines)
+			overlapLines := tc.calculateOverlapLines(currentLines, overlap)
 			currentLines = overlapLines
 			currentTokens = tc.countTokens(strings.Join(currentLines, "\n"))
 			startLine = i - len(overlapLines)
@@ -110,10 +140,9 @@ func (tc *TokenChunker) createChunk(repoPath, filePath, language string, lines [
 		return nil
 	}
 
-	// Ensure chunk doesn't exceed safe size (4000 chars ~ 1000 tokens)
-	const maxChunkSize = 4000
-	if len(content) > maxChunkSize {
-		content = content[:maxChunkSize]
+	// Ensure chunk doesn't exceed safe size
+	if len(content) > maxChunkSizeBytes {
+		content = content[:maxChunkSizeBytes]
 	}
 
 	return &models.CodeChunk{
@@ -129,20 +158,38 @@ func (tc *TokenChunker) createChunk(repoPath, filePath, language string, lines [
 }
 
 // calculateOverlapLines returns lines to overlap with next chunk
-func (tc *TokenChunker) calculateOverlapLines(lines []string) []string {
-	if len(lines) == 0 {
+func (tc *TokenChunker) calculateOverlapLines(lines []string, overlapTokens int) []string {
+	if len(lines) == 0 || overlapTokens <= 0 {
 		return []string{}
 	}
 
 	// Calculate overlap in tokens
 	var overlapLines []string
-	overlapTokens := 0
+	currentOverlap := 0
 
 	// Work backwards from end
-	for i := len(lines) - 1; i >= 0 && overlapTokens < tc.overlap; i-- {
+	for i := len(lines) - 1; i >= 0; i-- {
 		line := lines[i]
 		lineTokens := len(tc.tokenizer.Encode(line, nil, nil))
-		overlapTokens += lineTokens
+
+		// Check if adding this line would exceed the overlap limit
+		if currentOverlap+lineTokens > overlapTokens {
+			// Only add if we haven't collected any overlap yet (ensure at least one line)
+			// or if the excess is within a reasonable threshold
+			if len(overlapLines) == 0 {
+				// Always include at least one line to ensure some overlap exists
+				overlapLines = append([]string{line}, overlapLines...)
+				currentOverlap += lineTokens
+			} else if float64(currentOverlap+lineTokens) <= float64(overlapTokens)*maxOverlapExcessRatio {
+				// Allow up to maxOverlapExcessRatio excess (default 20%)
+				overlapLines = append([]string{line}, overlapLines...)
+				currentOverlap += lineTokens
+			}
+			// Stop adding more lines once we've reached or exceeded the limit
+			break
+		}
+
+		currentOverlap += lineTokens
 		overlapLines = append([]string{line}, overlapLines...)
 	}
 
@@ -152,6 +199,34 @@ func (tc *TokenChunker) calculateOverlapLines(lines []string) []string {
 // countTokens counts total tokens in text
 func (tc *TokenChunker) countTokens(text string) int {
 	return len(tc.tokenizer.Encode(text, nil, nil))
+}
+
+// SetLimits updates the max tokens and overlap for adaptive chunking
+// This allows different chunk sizes based on file size
+func (tc *TokenChunker) SetLimits(maxTokens, overlap int) error {
+	if maxTokens <= 0 {
+		return fmt.Errorf("maxTokens must be positive, got %d", maxTokens)
+	}
+	if overlap < 0 {
+		return fmt.Errorf("overlap must be non-negative, got %d", overlap)
+	}
+	if overlap >= maxTokens {
+		return fmt.Errorf("overlap (%d) must be less than maxTokens (%d)", overlap, maxTokens)
+	}
+
+	tc.mux.Lock()
+	defer tc.mux.Unlock()
+
+	tc.maxTokens = maxTokens
+	tc.overlap = overlap
+	return nil
+}
+
+// GetLimits returns the current max tokens and overlap settings
+func (tc *TokenChunker) GetLimits() (maxTokens, overlap int) {
+	tc.mux.RLock()
+	defer tc.mux.RUnlock()
+	return tc.maxTokens, tc.overlap
 }
 
 // GetLanguagePatterns returns regex patterns for detecting code boundaries

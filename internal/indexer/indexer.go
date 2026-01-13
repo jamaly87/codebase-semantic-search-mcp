@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jamaly87/codebase-semantic-search/internal/cache"
@@ -12,6 +13,14 @@ import (
 	"github.com/jamaly87/codebase-semantic-search/internal/models"
 	"github.com/jamaly87/codebase-semantic-search/internal/vectordb"
 	"github.com/jamaly87/codebase-semantic-search/pkg/config"
+)
+
+// Indexing configuration constants
+const (
+	// DefaultParallelWorkers is the default number of parallel workers for file processing
+	DefaultParallelWorkers = 4
+	// ProgressLogInterval is the interval at which to log progress updates (every N files)
+	ProgressLogInterval = 10
 )
 
 // Indexer orchestrates the code indexing process
@@ -127,61 +136,16 @@ func (idx *Indexer) doIndex(job *models.IndexJob, forceReindex bool) {
 		return
 	}
 
-	job.FilesTotal = len(scanResult.Files)
-	log.Printf("[%s] Found %d files to process", job.ID, job.FilesTotal)
+	job.SetFilesTotal(len(scanResult.Files))
+	log.Printf("[%s] Found %d files to process", job.ID, job.GetFilesTotal())
 
-	// Process files
-	var allChunks []models.CodeChunk
-	var processedFiles int
-
-	for _, filePath := range scanResult.Files {
-		// Check if file needs reindexing
-		if !forceReindex && idx.config.Indexing.Incremental {
-			needsReindex, err := idx.hashManager.NeedsReindex(filePath)
-			if err != nil {
-				log.Printf("[%s] Warning: Failed to check hash for %s: %v", job.ID, filePath, err)
-			} else if !needsReindex {
-				// Skip file, it hasn't changed
-				processedFiles++
-				continue
-			}
-		}
-
-		// Chunk file
-		chunks, err := idx.chunker.ChunkFile(job.RepoPath, filePath)
-		if err != nil {
-			log.Printf("[%s] Warning: Failed to chunk %s: %v", job.ID, filePath, err)
-			continue
-		}
-
-		// Add timestamp to chunks
-		now := time.Now()
-		for i := range chunks {
-			chunks[i].IndexedAt = now
-		}
-
-		allChunks = append(allChunks, chunks...)
-
-		// Update hash cache
-		if idx.config.Indexing.Incremental {
-			if err := idx.hashManager.Update(filePath, len(chunks)); err != nil {
-				log.Printf("[%s] Warning: Failed to update hash for %s: %v", job.ID, filePath, err)
-			}
-		}
-
-		processedFiles++
-		job.FilesIndexed = processedFiles
-		job.Progress = float64(processedFiles) / float64(job.FilesTotal)
-
-		if processedFiles%100 == 0 {
-			log.Printf("[%s] Progress: %d/%d files (%.1f%%)",
-				job.ID, processedFiles, job.FilesTotal, job.Progress*100)
-		}
-	}
+	// Process files in parallel using worker pool
+	allChunks := idx.processFilesInParallel(job, scanResult.Files, forceReindex)
 
 	job.ChunksTotal = len(allChunks)
 
-	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), processedFiles)
+	filesIndexed, _ := job.GetProgress()
+	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), filesIndexed)
 
 	// Phase 3: Generate embeddings
 	if len(allChunks) > 0 {
@@ -234,6 +198,119 @@ func (idx *Indexer) doIndex(job *models.IndexJob, forceReindex bool) {
 	log.Printf("[%s] Indexing completed successfully in %v", job.ID, time.Since(job.StartTime))
 }
 
+// processFilesInParallel processes files in parallel using a worker pool pattern
+func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string, forceReindex bool) []models.CodeChunk {
+	// Determine number of workers
+	numWorkers := idx.config.Indexing.ParallelWorkers
+	if numWorkers <= 0 {
+		numWorkers = DefaultParallelWorkers
+	}
+
+	// Channel for file paths
+	fileChan := make(chan string, len(files))
+	for _, filePath := range files {
+		fileChan <- filePath
+	}
+	close(fileChan)
+
+	// Channel for chunks from workers
+	chunkChan := make(chan []models.CodeChunk, numWorkers*2)
+
+	// Track progress atomically
+	var processedFiles int64
+	var allChunks []models.CodeChunk
+	var chunksMux sync.Mutex
+
+	// Worker pool
+	var wg sync.WaitGroup
+
+	// Start workers
+	log.Printf("[%s] Starting %d workers for parallel processing", job.ID, numWorkers)
+	filesTotal := job.GetFilesTotal()
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+
+			for filePath := range fileChan {
+				// Check if file needs reindexing
+				if !forceReindex && idx.config.Indexing.Incremental {
+					needsReindex, err := idx.hashManager.NeedsReindex(filePath)
+					if err != nil {
+						log.Printf("[%s] Warning: Failed to check hash for %s: %v", job.ID, filePath, err)
+					} else if !needsReindex {
+						// Skip file, it hasn't changed
+						atomic.AddInt64(&processedFiles, 1)
+						current := atomic.LoadInt64(&processedFiles)
+						job.UpdateProgress(int(current), float64(current)/float64(filesTotal))
+						continue
+					}
+				}
+
+				// Chunk file
+				chunks, err := idx.chunker.ChunkFile(job.RepoPath, filePath)
+				if err != nil {
+					log.Printf("[%s] Warning: Failed to chunk %s: %v", job.ID, filePath, err)
+					atomic.AddInt64(&processedFiles, 1)
+					current := atomic.LoadInt64(&processedFiles)
+					job.UpdateProgress(int(current), float64(current)/float64(filesTotal))
+					continue
+				}
+
+				// Add timestamp to chunks
+				now := time.Now()
+				for i := range chunks {
+					chunks[i].IndexedAt = now
+				}
+
+				// Send chunks to channel
+				chunkChan <- chunks
+
+				// Update hash cache
+				if idx.config.Indexing.Incremental {
+					if err := idx.hashManager.Update(filePath, len(chunks)); err != nil {
+						log.Printf("[%s] Warning: Failed to update hash for %s: %v", job.ID, filePath, err)
+					}
+				}
+
+				// Update progress
+				atomic.AddInt64(&processedFiles, 1)
+				current := atomic.LoadInt64(&processedFiles)
+				job.UpdateProgress(int(current), float64(current)/float64(filesTotal))
+
+				// Log progress periodically
+				if current%ProgressLogInterval == 0 || current == 1 {
+					_, progress := job.GetProgress()
+					log.Printf("[%s] Progress: %d/%d files (%.1f%%)",
+						job.ID, current, filesTotal, progress*100)
+				}
+			}
+		}(i)
+	}
+
+	// Collect chunks in a separate goroutine
+	done := make(chan bool)
+	go func() {
+		for chunks := range chunkChan {
+			chunksMux.Lock()
+			allChunks = append(allChunks, chunks...)
+			chunksMux.Unlock()
+		}
+		done <- true
+	}()
+
+	// Wait for all workers to finish
+	wg.Wait()
+	close(chunkChan)
+
+	// Wait for chunk collection to finish
+	<-done
+
+	finalProcessed := atomic.LoadInt64(&processedFiles)
+	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), finalProcessed)
+	return allChunks
+}
+
 // GetJob returns a job by ID
 func (idx *Indexer) GetJob(jobID string) (*models.IndexJob, error) {
 	idx.jobsMux.RLock()
@@ -256,9 +333,10 @@ func (idx *Indexer) GetRepoIndex(repoPath string) (*models.RepoIndex, error) {
 	for _, job := range idx.jobs {
 		if job.RepoPath == repoPath && job.Status == models.IndexStatusRunning {
 			idx.jobsMux.RUnlock()
+			filesIndexed, _ := job.GetProgress()
 			return &models.RepoIndex{
 				RepoPath:    repoPath,
-				TotalFiles:  job.FilesIndexed,
+				TotalFiles:  filesIndexed,
 				TotalChunks: job.ChunksTotal,
 				Languages:   make(map[string]int),
 				LastIndexed: job.StartTime,

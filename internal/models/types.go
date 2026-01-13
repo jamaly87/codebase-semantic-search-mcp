@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // CodeChunk represents a chunk of code stored in the vector database
 type CodeChunk struct {
@@ -14,6 +17,7 @@ type CodeChunk struct {
 	EndLine      int                    `json:"end_line"`
 	FunctionName string                 `json:"function_name,omitempty"`
 	ClassName    string                 `json:"class_name,omitempty"`
+	ParentChunkID string                 `json:"parent_chunk_id,omitempty"` // For hierarchical chunking
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 	Embedding    []float32              `json:"embedding,omitempty"`
 	IndexedAt    time.Time              `json:"indexed_at"`
@@ -25,6 +29,8 @@ type ChunkType string
 const (
 	ChunkTypeFunction ChunkType = "function"
 	ChunkTypeFile     ChunkType = "file"
+	ChunkTypeClass    ChunkType = "class"    // Class/interface summary chunk
+	ChunkTypeMethod   ChunkType = "method"   // Method within a class
 )
 
 // SearchResult represents a search result with score
@@ -60,6 +66,7 @@ const (
 
 // IndexJob represents a background indexing job
 type IndexJob struct {
+	mu           sync.RWMutex  // mu protects all fields from concurrent access
 	ID           string        `json:"id"`
 	RepoPath     string        `json:"repo_path"`
 	Status       IndexStatus   `json:"status"`
@@ -70,6 +77,35 @@ type IndexJob struct {
 	FilesIndexed int           `json:"files_indexed"`
 	ChunksTotal  int           `json:"chunks_total"`
 	Error        string        `json:"error,omitempty"`
+}
+
+// UpdateProgress safely updates the FilesIndexed and Progress fields
+func (j *IndexJob) UpdateProgress(filesIndexed int, progress float64) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.FilesIndexed = filesIndexed
+	j.Progress = progress
+}
+
+// GetProgress safely retrieves the current progress values
+func (j *IndexJob) GetProgress() (filesIndexed int, progress float64) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.FilesIndexed, j.Progress
+}
+
+// GetFilesTotal safely retrieves the total files count
+func (j *IndexJob) GetFilesTotal() int {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.FilesTotal
+}
+
+// SetFilesTotal safely sets the total files count
+func (j *IndexJob) SetFilesTotal(total int) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.FilesTotal = total
 }
 
 // FileHash tracks file hashes for incremental indexing

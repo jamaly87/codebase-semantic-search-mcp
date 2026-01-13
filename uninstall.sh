@@ -60,15 +60,17 @@ stop_services() {
             echo "   Found docker-compose.yml in $compose_dir"
             echo "   Running docker-compose down with project: $project_name..."
 
-            # Try with explicit project name first
+            # Try with explicit project name first, then without
             if (cd "$compose_dir" && docker-compose -p "$project_name" down -v 2>/dev/null); then
                 echo -e "${GREEN}   ✓ Stopped and removed containers via docker-compose${NC}"
                 stopped=true
-                break
             # Try without project name
             elif (cd "$compose_dir" && docker-compose down -v 2>/dev/null); then
                 echo -e "${GREEN}   ✓ Stopped and removed containers via docker-compose${NC}"
                 stopped=true
+            fi
+
+            if [ "$stopped" = true ]; then
                 break
             fi
         fi
@@ -206,7 +208,7 @@ remove_images() {
         local images_removed=0
         local images_failed=0
 
-        echo "$all_images" | while read -r image; do
+        while read -r image; do
             if [ -n "$image" ]; then
                 echo "   Removing $image..."
                 if docker rmi -f "$image" 2>/dev/null; then
@@ -217,7 +219,7 @@ remove_images() {
                     ((images_failed++))
                 fi
             fi
-        done
+        done <<< "$all_images"
 
         # Also try to remove untagged/dangling images
         local dangling=$(docker images -f "dangling=true" -q 2>/dev/null | head -20)
@@ -228,7 +230,7 @@ remove_images() {
             done
         fi
 
-        echo -e "${GREEN}   ✓ Image removal complete${NC}"
+        echo -e "${GREEN}   ✓ Image removal complete (removed: $images_removed, failed: $images_failed)${NC}"
     else
         echo -e "${YELLOW}   ⊘ Skipped image removal${NC}"
     fi

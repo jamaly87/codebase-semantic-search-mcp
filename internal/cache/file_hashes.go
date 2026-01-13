@@ -7,15 +7,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/jamaly87/codebase-semantic-search/internal/models"
 )
 
 // FileHashManager manages file hashes for incremental indexing
+// Thread-safe: all operations are protected by a mutex for concurrent access
 type FileHashManager struct {
 	cacheDir string
 	cache    *models.FileHashCache
+	mux      sync.RWMutex // Protects cache access from concurrent workers
 }
 
 // NewFileHashManager creates a new file hash manager
@@ -32,6 +35,9 @@ func NewFileHashManager(cacheDir string) (*FileHashManager, error) {
 
 // Load loads the file hash cache for a repository
 func (fhm *FileHashManager) Load(repoPath string) error {
+	fhm.mux.Lock()
+	defer fhm.mux.Unlock()
+
 	cachePath := fhm.getCachePath(repoPath)
 
 	// If cache file doesn't exist, create new cache
@@ -61,18 +67,28 @@ func (fhm *FileHashManager) Load(repoPath string) error {
 
 // Save saves the file hash cache
 func (fhm *FileHashManager) Save() error {
+	fhm.mux.RLock()
 	if fhm.cache == nil {
+		fhm.mux.RUnlock()
 		return fmt.Errorf("no cache loaded")
 	}
 
-	fhm.cache.UpdatedAt = time.Now()
+	// Create a copy to avoid holding lock during file I/O
+	cacheCopy := *fhm.cache
+	cacheCopy.Hashes = make(map[string]models.FileHash)
+	for k, v := range fhm.cache.Hashes {
+		cacheCopy.Hashes[k] = v
+	}
+	fhm.mux.RUnlock()
 
-	data, err := json.MarshalIndent(fhm.cache, "", "  ")
+	cacheCopy.UpdatedAt = time.Now()
+
+	data, err := json.MarshalIndent(cacheCopy, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal cache: %w", err)
 	}
 
-	cachePath := fhm.getCachePath(fhm.cache.RepoPath)
+	cachePath := fhm.getCachePath(cacheCopy.RepoPath)
 	if err := os.WriteFile(cachePath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write cache file: %w", err)
 	}
@@ -81,18 +97,30 @@ func (fhm *FileHashManager) Save() error {
 }
 
 // NeedsReindex returns true if a file needs to be reindexed
+// Thread-safe: uses read lock for concurrent access
 func (fhm *FileHashManager) NeedsReindex(filePath string) (bool, error) {
+	fhm.mux.RLock()
 	if fhm.cache == nil {
+		fhm.mux.RUnlock()
 		return true, nil // No cache loaded, reindex everything
 	}
+	fhm.mux.RUnlock()
 
-	// Calculate current file hash
+	// Calculate current file hash (expensive operation, do outside lock)
 	currentHash, err := computeFileHash(filePath)
 	if err != nil {
 		return false, fmt.Errorf("failed to compute file hash: %w", err)
 	}
 
-	// Check if file exists in cache
+	// Check if file exists in cache with a single lock acquisition
+	fhm.mux.RLock()
+	defer fhm.mux.RUnlock()
+
+	// Re-check cache validity after expensive operation
+	if fhm.cache == nil {
+		return true, nil // Cache was cleared, reindex everything
+	}
+
 	cached, exists := fhm.cache.Hashes[filePath]
 	if !exists {
 		return true, nil // New file
@@ -103,14 +131,19 @@ func (fhm *FileHashManager) NeedsReindex(filePath string) (bool, error) {
 }
 
 // Update updates the hash for a file
+// Thread-safe: uses write lock for concurrent access
 func (fhm *FileHashManager) Update(filePath string, chunkCount int) error {
-	if fhm.cache == nil {
-		return fmt.Errorf("no cache loaded")
-	}
-
+	// Calculate hash outside lock (expensive operation)
 	hash, err := computeFileHash(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to compute file hash: %w", err)
+	}
+
+	fhm.mux.Lock()
+	defer fhm.mux.Unlock()
+
+	if fhm.cache == nil {
+		return fmt.Errorf("no cache loaded")
 	}
 
 	fhm.cache.Hashes[filePath] = models.FileHash{
@@ -124,14 +157,22 @@ func (fhm *FileHashManager) Update(filePath string, chunkCount int) error {
 }
 
 // Remove removes a file from the cache
+// Thread-safe: uses write lock for concurrent access
 func (fhm *FileHashManager) Remove(filePath string) {
+	fhm.mux.Lock()
+	defer fhm.mux.Unlock()
+
 	if fhm.cache != nil {
 		delete(fhm.cache.Hashes, filePath)
 	}
 }
 
 // GetStats returns statistics about the cache
+// Thread-safe: uses read lock for concurrent access
 func (fhm *FileHashManager) GetStats() map[string]interface{} {
+	fhm.mux.RLock()
+	defer fhm.mux.RUnlock()
+
 	if fhm.cache == nil {
 		return map[string]interface{}{
 			"total_files": 0,
@@ -152,7 +193,11 @@ func (fhm *FileHashManager) GetStats() map[string]interface{} {
 }
 
 // Clear clears the cache for a repository
+// Thread-safe: uses write lock for concurrent access
 func (fhm *FileHashManager) Clear(repoPath string) error {
+	fhm.mux.Lock()
+	defer fhm.mux.Unlock()
+
 	cachePath := fhm.getCachePath(repoPath)
 	if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove cache file: %w", err)
