@@ -115,7 +115,7 @@ func (fhm *FileHashManager) NeedsReindex(filePath string) (bool, error) {
 	// Check if file exists in cache with a single lock acquisition
 	fhm.mux.RLock()
 	defer fhm.mux.RUnlock()
-	
+
 	// Re-check cache validity after expensive operation
 	if fhm.cache == nil {
 		return true, nil // Cache was cleared, reindex everything
