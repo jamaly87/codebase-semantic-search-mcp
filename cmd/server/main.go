@@ -127,7 +127,9 @@ func (lm *logManager) rotate() error {
 	
 	if err := os.Rename(lm.logFilePath, backupPath); err != nil {
 		// Reopen the original file even if rename failed
-		lm.openLogFile()
+		if reopenErr := lm.openLogFile(); reopenErr != nil {
+			log.Printf("Failed to reopen log file after failed rotation: %v", reopenErr)
+		}
 		return fmt.Errorf("failed to rotate log file: %w", err)
 	}
 	
@@ -139,6 +141,9 @@ func (lm *logManager) rotate() error {
 	log.Printf("Log file rotated: %s", backupPath)
 	
 	// Compress if enabled
+	// Note: This is a fire-and-forget operation. In a production system with actual
+	// compression implemented, consider using a worker pool or WaitGroup for proper
+	// lifecycle management to avoid orphaned goroutines during shutdown.
 	if lm.config.Compress {
 		go compressLogFile(backupPath)
 	}
