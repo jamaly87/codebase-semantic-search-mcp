@@ -211,6 +211,9 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 	var processedFiles int64
 	var allChunks []models.CodeChunk
 	var chunksMux sync.Mutex
+	
+	// Mutex to protect job field updates
+	var jobProgressMux sync.Mutex
 
 	// Worker pool
 	var wg sync.WaitGroup
@@ -238,8 +241,10 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 						log.Printf("[%s] Worker %d: Skipping unchanged file %s", job.ID, workerID, filePath)
 						atomic.AddInt64(&processedFiles, 1)
 						current := atomic.LoadInt64(&processedFiles)
+						jobProgressMux.Lock()
 						job.FilesIndexed = int(current)
 						job.Progress = float64(current) / float64(job.FilesTotal)
+						jobProgressMux.Unlock()
 						continue
 					}
 				}
@@ -251,8 +256,10 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 					log.Printf("[%s] Warning: Failed to chunk %s: %v", job.ID, filePath, err)
 					atomic.AddInt64(&processedFiles, 1)
 					current := atomic.LoadInt64(&processedFiles)
+					jobProgressMux.Lock()
 					job.FilesIndexed = int(current)
 					job.Progress = float64(current) / float64(job.FilesTotal)
+					jobProgressMux.Unlock()
 					continue
 				}
 				log.Printf("[%s] Worker %d: Generated %d chunks from %s", job.ID, workerID, len(chunks), filePath)
@@ -278,12 +285,15 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 				// Update progress
 				atomic.AddInt64(&processedFiles, 1)
 				current := atomic.LoadInt64(&processedFiles)
+				jobProgressMux.Lock()
 				job.FilesIndexed = int(current)
 				job.Progress = float64(current) / float64(job.FilesTotal)
+				progress := job.Progress
+				jobProgressMux.Unlock()
 
 				if current%10 == 0 || current == 1 {
 					log.Printf("[%s] Progress: %d/%d files (%.1f%%)",
-						job.ID, current, job.FilesTotal, job.Progress*100)
+						job.ID, current, job.FilesTotal, progress*100)
 				}
 				
 				log.Printf("[%s] Worker %d: Completed processing %s", job.ID, workerID, filePath)
