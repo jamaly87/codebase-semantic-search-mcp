@@ -166,14 +166,7 @@ func (c *Client) GenerateEmbeddings(texts []string) ([][]float32, error) {
 		go func(idx int, txt string) {
 			defer wg.Done()
 
-			// Check if context is already cancelled before starting work
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			// Acquire semaphore
+			// Acquire semaphore with context cancellation check
 			select {
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()
