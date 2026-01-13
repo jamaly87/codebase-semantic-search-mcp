@@ -2,6 +2,7 @@ package embeddings
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -146,6 +147,10 @@ func (c *Client) GenerateEmbeddings(texts []string) ([][]float32, error) {
 
 	// Use concurrent requests with connection pooling for better performance
 	// The http.Client with keep-alive will reuse connections
+	// Create a context with cancellation to stop remaining work on first error
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	embeddings := make([][]float32, len(texts))
 	errors := make([]error, len(texts))
 
@@ -154,19 +159,35 @@ func (c *Client) GenerateEmbeddings(texts []string) ([][]float32, error) {
 	maxConcurrent := 10 // Process up to 10 requests concurrently
 	semaphore := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
+	var firstError sync.Once
 
 	for i, text := range texts {
 		wg.Add(1)
 		go func(idx int, txt string) {
 			defer wg.Done()
 
+			// Check if context is already cancelled before starting work
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			// Acquire semaphore
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				return
+			}
 
 			embedding, err := c.GenerateEmbedding(txt)
 			if err != nil {
 				errors[idx] = fmt.Errorf("failed to generate embedding for item %d: %w", idx, err)
+				// Cancel context on first error to stop remaining goroutines
+				firstError.Do(func() {
+					cancel()
+				})
 				return
 			}
 			embeddings[idx] = embedding
