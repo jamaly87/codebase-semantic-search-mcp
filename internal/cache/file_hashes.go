@@ -100,12 +100,11 @@ func (fhm *FileHashManager) Save() error {
 // Thread-safe: uses read lock for concurrent access
 func (fhm *FileHashManager) NeedsReindex(filePath string) (bool, error) {
 	fhm.mux.RLock()
-	cache := fhm.cache
-	fhm.mux.RUnlock()
-
-	if cache == nil {
+	if fhm.cache == nil {
+		fhm.mux.RUnlock()
 		return true, nil // No cache loaded, reindex everything
 	}
+	fhm.mux.RUnlock()
 
 	// Calculate current file hash (expensive operation, do outside lock)
 	currentHash, err := computeFileHash(filePath)
@@ -113,11 +112,16 @@ func (fhm *FileHashManager) NeedsReindex(filePath string) (bool, error) {
 		return false, fmt.Errorf("failed to compute file hash: %w", err)
 	}
 
-	// Check if file exists in cache (re-acquire read lock)
+	// Check if file exists in cache with a single lock acquisition
 	fhm.mux.RLock()
-	cached, exists := cache.Hashes[filePath]
-	fhm.mux.RUnlock()
+	defer fhm.mux.RUnlock()
+	
+	// Re-check cache validity after expensive operation
+	if fhm.cache == nil {
+		return true, nil // Cache was cleared, reindex everything
+	}
 
+	cached, exists := fhm.cache.Hashes[filePath]
 	if !exists {
 		return true, nil // New file
 	}
