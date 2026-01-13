@@ -66,7 +66,7 @@ const (
 
 // IndexJob represents a background indexing job
 type IndexJob struct {
-	mu           sync.Mutex    // mu protects the FilesIndexed and Progress fields from concurrent access
+	mu           sync.RWMutex  // mu protects all fields from concurrent access
 	ID           string        `json:"id"`
 	RepoPath     string        `json:"repo_path"`
 	Status       IndexStatus   `json:"status"`
@@ -89,9 +89,23 @@ func (j *IndexJob) UpdateProgress(filesIndexed int, progress float64) {
 
 // GetProgress safely retrieves the current progress values
 func (j *IndexJob) GetProgress() (filesIndexed int, progress float64) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.FilesIndexed, j.Progress
+}
+
+// GetFilesTotal safely retrieves the total files count
+func (j *IndexJob) GetFilesTotal() int {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.FilesTotal
+}
+
+// SetFilesTotal safely sets the total files count
+func (j *IndexJob) SetFilesTotal(total int) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.FilesIndexed, j.Progress
+	j.FilesTotal = total
 }
 
 // FileHash tracks file hashes for incremental indexing

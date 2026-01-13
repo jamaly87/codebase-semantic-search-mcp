@@ -10,6 +10,24 @@ import (
 	"github.com/jamaly87/codebase-semantic-search/pkg/config"
 )
 
+// Chunking configuration constants
+const (
+	// DefaultMaxTokens is the default maximum tokens per chunk (conservative for nomic-embed-text's 8192 limit)
+	DefaultMaxTokens = 200
+	// DefaultOverlapTokens is the default overlap tokens to maintain context
+	DefaultOverlapTokens = 20
+	// SmallFileLineThreshold is the line count threshold for small files (< 1000 lines)
+	SmallFileLineThreshold = 1000
+	// MediumFileLineThreshold is the line count threshold for medium files (1000-5000 lines)
+	MediumFileLineThreshold = 5000
+	// SmallFileOverlapRatio is the overlap ratio for small files (~6.7%)
+	SmallFileOverlapRatio = 15
+	// MediumFileOverlapRatio is the overlap ratio for medium files (~10%)
+	MediumFileOverlapRatio = 10
+	// LargeFileOverlapRatio is the overlap ratio for large files (~14%)
+	LargeFileOverlapRatio = 7
+)
+
 // Chunker splits code files into semantic chunks using AST and token-aware strategies
 type Chunker struct {
 	config       *config.ChunkingConfig
@@ -27,9 +45,7 @@ func NewChunker(cfg *config.ChunkingConfig) *Chunker {
 	}
 
 	// Create token-based chunker (fallback strategy)
-	// maxTokens: ~200 tokens per chunk (conservative for nomic-embed-text's 8192 limit)
-	// overlap: ~20 tokens to maintain context
-	tokenChunker, err := NewTokenChunker(200, 20)
+	tokenChunker, err := NewTokenChunker(DefaultMaxTokens, DefaultOverlapTokens)
 	if err != nil {
 		log.Fatalf("Failed to create token chunker: %v", err)
 	}
@@ -51,8 +67,8 @@ func NewChunker(cfg *config.ChunkingConfig) *Chunker {
 
 // ChunkFile splits a file into semantic chunks using the best available strategy
 // Strategy priority:
-//   1. AST-based (if Tree-sitter parser available for language) - 80-95% accuracy
-//   2. Token-aware (fallback for all languages) - 60-75% accuracy
+//  1. AST-based (if Tree-sitter parser available for language) - 80-95% accuracy
+//  2. Token-aware (fallback for all languages) - 60-75% accuracy
 //
 // File-level chunks are REMOVED entirely to prevent context length errors
 // Uses adaptive chunking based on file size for optimal chunk granularity
@@ -115,20 +131,20 @@ func (c *Chunker) calculateOptimalChunkSize(fileLines int) (maxTokens, overlapTo
 	// Use adaptive chunking if configured, otherwise use defaults
 	if c.config.SmallFileMaxTokens > 0 {
 		switch {
-		case fileLines < 1000:
+		case fileLines < SmallFileLineThreshold:
 			maxTokens = c.config.SmallFileMaxTokens
-			overlapTokens = maxTokens / 15 // ~6.7% overlap
-		case fileLines < 5000:
+			overlapTokens = maxTokens / SmallFileOverlapRatio
+		case fileLines < MediumFileLineThreshold:
 			maxTokens = c.config.MediumFileMaxTokens
-			overlapTokens = maxTokens / 10 // ~10% overlap
+			overlapTokens = maxTokens / MediumFileOverlapRatio
 		default:
 			maxTokens = c.config.LargeFileMaxTokens
-			overlapTokens = maxTokens / 7 // ~14% overlap (more overlap for large files)
+			overlapTokens = maxTokens / LargeFileOverlapRatio
 		}
 	} else {
 		// Default values if not configured
-		maxTokens = 200
-		overlapTokens = 20
+		maxTokens = DefaultMaxTokens
+		overlapTokens = DefaultOverlapTokens
 	}
 
 	return maxTokens, overlapTokens

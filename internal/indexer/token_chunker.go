@@ -14,6 +14,10 @@ import (
 const (
 	// maxOverlapExcessRatio defines the maximum allowed excess for overlap as a ratio (1.2 = 20% excess)
 	maxOverlapExcessRatio = 1.2
+	// maxChunkSizeBytes is the maximum safe chunk size in bytes (~4000 chars ~ 1000 tokens)
+	maxChunkSizeBytes = 4000
+	// boundaryLookaheadLines is the number of lines to look ahead when searching for natural boundaries
+	boundaryLookaheadLines = 10
 )
 
 // TokenChunker splits code into chunks based on token count (model-aware)
@@ -77,9 +81,9 @@ func (tc *TokenChunker) chunkWithLimits(repoPath, filePath, language, content st
 
 		// Check if adding this line would exceed max tokens
 		if currentTokens+lineTokens > maxTokens && len(currentLines) > 0 {
-			// Look ahead for a natural boundary within next 10 lines
+			// Look ahead for a natural boundary within next N lines
 			boundaryFound := false
-			for j := i; j < i+10 && j < len(lines); j++ {
+			for j := i; j < i+boundaryLookaheadLines && j < len(lines); j++ {
 				trimmed := strings.TrimSpace(lines[j])
 				if IsBoundary(trimmed, language) {
 					// Found a boundary, extend to there
@@ -136,10 +140,9 @@ func (tc *TokenChunker) createChunk(repoPath, filePath, language string, lines [
 		return nil
 	}
 
-	// Ensure chunk doesn't exceed safe size (4000 chars ~ 1000 tokens)
-	const maxChunkSize = 4000
-	if len(content) > maxChunkSize {
-		content = content[:maxChunkSize]
+	// Ensure chunk doesn't exceed safe size
+	if len(content) > maxChunkSizeBytes {
+		content = content[:maxChunkSizeBytes]
 	}
 
 	return &models.CodeChunk{
@@ -168,7 +171,7 @@ func (tc *TokenChunker) calculateOverlapLines(lines []string, overlapTokens int)
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := lines[i]
 		lineTokens := len(tc.tokenizer.Encode(line, nil, nil))
-		
+
 		// Check if adding this line would exceed the overlap limit
 		if currentOverlap+lineTokens > overlapTokens {
 			// Only add if we haven't collected any overlap yet (ensure at least one line)
@@ -185,7 +188,7 @@ func (tc *TokenChunker) calculateOverlapLines(lines []string, overlapTokens int)
 			// Stop adding more lines once we've reached or exceeded the limit
 			break
 		}
-		
+
 		currentOverlap += lineTokens
 		overlapLines = append([]string{line}, overlapLines...)
 	}

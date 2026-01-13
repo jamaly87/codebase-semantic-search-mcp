@@ -15,6 +15,14 @@ import (
 	"github.com/jamaly87/codebase-semantic-search/pkg/config"
 )
 
+// Indexing configuration constants
+const (
+	// DefaultParallelWorkers is the default number of parallel workers for file processing
+	DefaultParallelWorkers = 4
+	// ProgressLogInterval is the interval at which to log progress updates (every N files)
+	ProgressLogInterval = 10
+)
+
 // Indexer orchestrates the code indexing process
 type Indexer struct {
 	config           *config.Config
@@ -128,8 +136,8 @@ func (idx *Indexer) doIndex(job *models.IndexJob, forceReindex bool) {
 		return
 	}
 
-	job.FilesTotal = len(scanResult.Files)
-	log.Printf("[%s] Found %d files to process", job.ID, job.FilesTotal)
+	job.SetFilesTotal(len(scanResult.Files))
+	log.Printf("[%s] Found %d files to process", job.ID, job.GetFilesTotal())
 
 	// Process files in parallel using worker pool
 	allChunks := idx.processFilesInParallel(job, scanResult.Files, forceReindex)
@@ -195,7 +203,7 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 	// Determine number of workers
 	numWorkers := idx.config.Indexing.ParallelWorkers
 	if numWorkers <= 0 {
-		numWorkers = 4 // Default to 4 workers
+		numWorkers = DefaultParallelWorkers
 	}
 
 	// Channel for file paths
@@ -218,17 +226,13 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 
 	// Start workers
 	log.Printf("[%s] Starting %d workers for parallel processing", job.ID, numWorkers)
+	filesTotal := job.GetFilesTotal()
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			log.Printf("[%s] Worker %d started", job.ID, workerID)
 
-			fileCount := 0
 			for filePath := range fileChan {
-				fileCount++
-				log.Printf("[%s] Worker %d: Processing file %d: %s", job.ID, workerID, fileCount, filePath)
-
 				// Check if file needs reindexing
 				if !forceReindex && idx.config.Indexing.Incremental {
 					needsReindex, err := idx.hashManager.NeedsReindex(filePath)
@@ -236,25 +240,22 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 						log.Printf("[%s] Warning: Failed to check hash for %s: %v", job.ID, filePath, err)
 					} else if !needsReindex {
 						// Skip file, it hasn't changed
-						log.Printf("[%s] Worker %d: Skipping unchanged file %s", job.ID, workerID, filePath)
 						atomic.AddInt64(&processedFiles, 1)
 						current := atomic.LoadInt64(&processedFiles)
-						job.UpdateProgress(int(current), float64(current)/float64(job.FilesTotal))
+						job.UpdateProgress(int(current), float64(current)/float64(filesTotal))
 						continue
 					}
 				}
 
 				// Chunk file
-				log.Printf("[%s] Worker %d: Chunking file %s", job.ID, workerID, filePath)
 				chunks, err := idx.chunker.ChunkFile(job.RepoPath, filePath)
 				if err != nil {
 					log.Printf("[%s] Warning: Failed to chunk %s: %v", job.ID, filePath, err)
 					atomic.AddInt64(&processedFiles, 1)
 					current := atomic.LoadInt64(&processedFiles)
-					job.UpdateProgress(int(current), float64(current)/float64(job.FilesTotal))
+					job.UpdateProgress(int(current), float64(current)/float64(filesTotal))
 					continue
 				}
-				log.Printf("[%s] Worker %d: Generated %d chunks from %s", job.ID, workerID, len(chunks), filePath)
 
 				// Add timestamp to chunks
 				now := time.Now()
@@ -263,9 +264,7 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 				}
 
 				// Send chunks to channel
-				log.Printf("[%s] Worker %d: Sending %d chunks to channel", job.ID, workerID, len(chunks))
 				chunkChan <- chunks
-				log.Printf("[%s] Worker %d: Sent chunks to channel", job.ID, workerID)
 
 				// Update hash cache
 				if idx.config.Indexing.Incremental {
@@ -277,47 +276,35 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 				// Update progress
 				atomic.AddInt64(&processedFiles, 1)
 				current := atomic.LoadInt64(&processedFiles)
-				job.UpdateProgress(int(current), float64(current)/float64(job.FilesTotal))
+				job.UpdateProgress(int(current), float64(current)/float64(filesTotal))
 
-				if current%10 == 0 || current == 1 {
+				// Log progress periodically
+				if current%ProgressLogInterval == 0 || current == 1 {
 					_, progress := job.GetProgress()
 					log.Printf("[%s] Progress: %d/%d files (%.1f%%)",
-						job.ID, current, job.FilesTotal, progress*100)
+						job.ID, current, filesTotal, progress*100)
 				}
-				
-				log.Printf("[%s] Worker %d: Completed processing %s", job.ID, workerID, filePath)
 			}
-			log.Printf("[%s] Worker %d: Finished processing all files (processed %d files)", job.ID, workerID, fileCount)
 		}(i)
 	}
 
 	// Collect chunks in a separate goroutine
 	done := make(chan bool)
-	chunkCount := int64(0)
 	go func() {
-		log.Printf("[%s] Chunk collector goroutine started", job.ID)
 		for chunks := range chunkChan {
-			receivedCount := atomic.AddInt64(&chunkCount, int64(len(chunks)))
-			log.Printf("[%s] Chunk collector: Received %d chunks (total: %d)", job.ID, len(chunks), receivedCount)
 			chunksMux.Lock()
 			allChunks = append(allChunks, chunks...)
 			chunksMux.Unlock()
-			log.Printf("[%s] Chunk collector: Added chunks to list (total chunks: %d)", job.ID, len(allChunks))
 		}
-		log.Printf("[%s] Chunk collector: Channel closed, finished collecting", job.ID)
 		done <- true
 	}()
 
 	// Wait for all workers to finish
-	log.Printf("[%s] Waiting for all %d workers to finish...", job.ID, numWorkers)
 	wg.Wait()
-	log.Printf("[%s] All workers finished, closing chunk channel", job.ID)
 	close(chunkChan)
 
 	// Wait for chunk collection to finish
-	log.Printf("[%s] Waiting for chunk collector to finish...", job.ID)
 	<-done
-	log.Printf("[%s] Chunk collector finished", job.ID)
 
 	finalProcessed := atomic.LoadInt64(&processedFiles)
 	log.Printf("[%s] Generated %d chunks from %d files", job.ID, len(allChunks), finalProcessed)

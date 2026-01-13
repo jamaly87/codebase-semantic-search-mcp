@@ -47,6 +47,26 @@ const (
 	nodeTypeVariableDecl      = "variable_declarator"
 )
 
+// Chunking constants
+const (
+	// minChunkSizeBytes is the minimum size for a valid chunk (to skip incomplete declarations)
+	minChunkSizeBytes = 10
+	// defaultMaxChunkSizeBytes is the default maximum chunk size if not configured
+	defaultMaxChunkSizeBytes = 4000
+	// classSignatureMaxLines is the maximum number of lines to include in class signature
+	classSignatureMaxLines = 50
+	// classSummaryMaxMethods is the maximum number of method signatures to include in class summary
+	classSummaryMaxMethods = 20
+	// methodSignatureMaxLength is the maximum length for a method signature in class summary
+	methodSignatureMaxLength = 100
+	// overlapLinesRatio is the ratio of lines to use for overlap when splitting large chunks (1/10 = 10%)
+	overlapLinesRatio = 10
+	// maxOverlapLines is the maximum number of overlap lines when splitting chunks
+	maxOverlapLines = 10
+	// minOverlapLines is the minimum number of overlap lines when splitting chunks
+	minOverlapLines = 1
+)
+
 // ASTChunker extracts semantic chunks using Tree-sitter AST parsing
 // Tree-sitter parsers are NOT thread-safe, so all operations must be protected by a mutex
 type ASTChunker struct {
@@ -136,7 +156,7 @@ func (ac *ASTChunker) extractSemanticNodes(tree *sitter.Tree, repoPath, filePath
 	nodeTypes := ac.getSemanticNodeTypes(language)
 	maxChunkSize := cfg.MaxChunkSizeBytes
 	if maxChunkSize == 0 {
-		maxChunkSize = 4000 // Default
+		maxChunkSize = defaultMaxChunkSizeBytes
 	}
 
 	// Walk the tree and extract semantic nodes
@@ -265,14 +285,13 @@ func (ac *ASTChunker) createChunkFromNode(node *sitter.Node, repoPath, filePath,
 	chunkContent := content[startByte:endByte]
 
 	// Skip very small chunks (likely incomplete or just declarations)
-	if len(strings.TrimSpace(chunkContent)) < 10 {
+	if len(strings.TrimSpace(chunkContent)) < minChunkSizeBytes {
 		return nil
 	}
 
 	// Ensure chunk doesn't exceed safe size
-	const maxChunkSize = 4000
-	if len(chunkContent) > maxChunkSize {
-		chunkContent = chunkContent[:maxChunkSize]
+	if len(chunkContent) > defaultMaxChunkSizeBytes {
+		chunkContent = chunkContent[:defaultMaxChunkSizeBytes]
 	}
 
 	// Get line numbers
@@ -495,7 +514,7 @@ func (ac *ASTChunker) createClassSummary(node *sitter.Node, content string, lang
 	// Find first method/constructor to determine where signature ends
 	signatureEnd := len(lines)
 	for i, line := range lines {
-		if i > 50 { // Limit signature to first 50 lines
+		if i > classSignatureMaxLines {
 			signatureEnd = i
 			break
 		}
@@ -518,8 +537,8 @@ func (ac *ASTChunker) createClassSummary(node *sitter.Node, content string, lang
 	if len(methodNodes) > 0 {
 		summary.WriteString("\n// Methods:\n")
 		for i, methodNode := range methodNodes {
-			if i >= 20 { // Limit to 20 method signatures
-				summary.WriteString(fmt.Sprintf("// ... and %d more methods\n", len(methodNodes)-20))
+			if i >= classSummaryMaxMethods {
+				summary.WriteString(fmt.Sprintf("// ... and %d more methods\n", len(methodNodes)-classSummaryMaxMethods))
 				break
 			}
 			methodName := ac.extractNodeName(methodNode, content)
@@ -532,8 +551,8 @@ func (ac *ASTChunker) createClassSummary(node *sitter.Node, content string, lang
 					if len(methodLines) > 0 {
 						// Get first line (signature) and truncate if too long
 						sig := strings.TrimSpace(methodLines[0])
-						if len(sig) > 100 {
-							sig = sig[:100] + "..."
+						if len(sig) > methodSignatureMaxLength {
+							sig = sig[:methodSignatureMaxLength] + "..."
 						}
 						summary.WriteString(fmt.Sprintf("// - %s\n", sig))
 					}
@@ -624,11 +643,11 @@ func (ac *ASTChunker) splitLargeChunk(chunk *models.CodeChunk, fullContent strin
 
 	// Determine overlap lines proportionally to the chunk size:
 	// use ~10% of total lines, with at least 1 and at most 10 lines of overlap.
-	overlapLines := len(lines) / 10
-	if overlapLines < 1 {
-		overlapLines = 1
-	} else if overlapLines > 10 {
-		overlapLines = 10
+	overlapLines := len(lines) / overlapLinesRatio
+	if overlapLines < minOverlapLines {
+		overlapLines = minOverlapLines
+	} else if overlapLines > maxOverlapLines {
+		overlapLines = maxOverlapLines
 	}
 	for i, line := range lines {
 		currentChunk.WriteString(line)
