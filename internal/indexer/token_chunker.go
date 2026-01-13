@@ -160,9 +160,26 @@ func (tc *TokenChunker) calculateOverlapLines(lines []string, overlapTokens int)
 	currentOverlap := 0
 
 	// Work backwards from end
-	for i := len(lines) - 1; i >= 0 && currentOverlap < overlapTokens; i-- {
+	for i := len(lines) - 1; i >= 0; i-- {
 		line := lines[i]
 		lineTokens := len(tc.tokenizer.Encode(line, nil, nil))
+		
+		// Check if adding this line would exceed the overlap limit
+		if currentOverlap+lineTokens > overlapTokens {
+			// Only add if we haven't collected any overlap yet (ensure at least one line)
+			// or if the excess is within a reasonable threshold (20% of target)
+			if len(overlapLines) == 0 {
+				// Always include at least one line to ensure some overlap exists
+				overlapLines = append([]string{line}, overlapLines...)
+			} else if currentOverlap+lineTokens <= overlapTokens*12/10 {
+				// Allow up to 20% excess (12/10 = 1.2)
+				overlapLines = append([]string{line}, overlapLines...)
+				currentOverlap += lineTokens
+			}
+			// Stop adding more lines once we've reached or exceeded the limit
+			break
+		}
+		
 		currentOverlap += lineTokens
 		overlapLines = append([]string{line}, overlapLines...)
 	}

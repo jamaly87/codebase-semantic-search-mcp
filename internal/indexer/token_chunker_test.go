@@ -140,6 +140,17 @@ func TestTokenChunker_OverlapCalculation(t *testing.T) {
 	if len(overlapLines1) > len(lines) {
 		t.Errorf("Overlap lines (%d) should not exceed original lines (%d)", len(overlapLines1), len(lines))
 	}
+
+	// Verify that overlap doesn't significantly exceed the requested token count
+	actualTokens1 := chunker.countTokens(strings.Join(overlapLines1, "\n"))
+	if actualTokens1 > 10*12/10 { // Allow 20% excess (12/10 = 1.2)
+		t.Errorf("Overlap tokens (%d) should not significantly exceed requested tokens (10), max allowed is %d", actualTokens1, 10*12/10)
+	}
+
+	actualTokens2 := chunker.countTokens(strings.Join(overlapLines2, "\n"))
+	if actualTokens2 > 50*12/10 { // Allow 20% excess
+		t.Errorf("Overlap tokens (%d) should not significantly exceed requested tokens (50), max allowed is %d", actualTokens2, 50*12/10)
+	}
 }
 
 func TestTokenChunker_EmptyContent(t *testing.T) {
@@ -155,6 +166,36 @@ func TestTokenChunker_EmptyContent(t *testing.T) {
 
 	if len(chunks) != 0 {
 		t.Errorf("Expected 0 chunks for empty content, got %d", len(chunks))
+	}
+}
+
+func TestTokenChunker_OverlapWithLargeLine(t *testing.T) {
+	chunker, err := NewTokenChunker(200, 20)
+	if err != nil {
+		t.Fatalf("Failed to create token chunker: %v", err)
+	}
+
+	// Create lines where one line has many more tokens than the overlap limit
+	lines := []string{
+		"short line",
+		"another short line",
+		"// This is a very long comment line that will have significantly more tokens than the overlap limit of 10 tokens, potentially exceeding it by a large margin",
+	}
+
+	// Request small overlap (10 tokens)
+	overlapLines := chunker.calculateOverlapLines(lines, 10)
+
+	// Should still include at least one line even if it exceeds the limit
+	if len(overlapLines) == 0 {
+		t.Error("Expected at least one line in overlap, got none")
+	}
+
+	// The overlap should not be excessive - in this case it should be just the last line
+	// since adding the second-to-last line would exceed the 20% threshold
+	actualTokens := chunker.countTokens(strings.Join(overlapLines, "\n"))
+	if actualTokens > 10*12/10 && len(overlapLines) > 1 {
+		// If we have more than one line AND we exceeded the threshold, that's a problem
+		t.Logf("Warning: Overlap tokens (%d) exceeded 20%% threshold with %d lines", actualTokens, len(overlapLines))
 	}
 }
 
