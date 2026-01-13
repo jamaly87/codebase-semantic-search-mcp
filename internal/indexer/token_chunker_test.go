@@ -140,6 +140,19 @@ func TestTokenChunker_OverlapCalculation(t *testing.T) {
 	if len(overlapLines1) > len(lines) {
 		t.Errorf("Overlap lines (%d) should not exceed original lines (%d)", len(overlapLines1), len(lines))
 	}
+
+	// Verify that overlap doesn't significantly exceed the requested token count
+	actualTokens1 := chunker.countTokens(strings.Join(overlapLines1, "\n"))
+	maxAllowed1 := int(float64(10) * maxOverlapExcessRatio)
+	if actualTokens1 > maxAllowed1 {
+		t.Errorf("Overlap tokens (%d) should not significantly exceed requested tokens (10), max allowed is %d", actualTokens1, maxAllowed1)
+	}
+
+	actualTokens2 := chunker.countTokens(strings.Join(overlapLines2, "\n"))
+	maxAllowed2 := int(float64(50) * maxOverlapExcessRatio)
+	if actualTokens2 > maxAllowed2 {
+		t.Errorf("Overlap tokens (%d) should not significantly exceed requested tokens (50), max allowed is %d", actualTokens2, maxAllowed2)
+	}
 }
 
 func TestTokenChunker_EmptyContent(t *testing.T) {
@@ -155,6 +168,37 @@ func TestTokenChunker_EmptyContent(t *testing.T) {
 
 	if len(chunks) != 0 {
 		t.Errorf("Expected 0 chunks for empty content, got %d", len(chunks))
+	}
+}
+
+func TestTokenChunker_OverlapWithLargeLine(t *testing.T) {
+	chunker, err := NewTokenChunker(200, 20)
+	if err != nil {
+		t.Fatalf("Failed to create token chunker: %v", err)
+	}
+
+	// Create lines where one line has many more tokens than the overlap limit
+	lines := []string{
+		"short line",
+		"another short line",
+		"// This is a very long comment line that will have significantly more tokens than the overlap limit of 10 tokens, potentially exceeding it by a large margin",
+	}
+
+	// Request small overlap (10 tokens)
+	overlapLines := chunker.calculateOverlapLines(lines, 10)
+
+	// Should still include at least one line even if it exceeds the limit
+	if len(overlapLines) == 0 {
+		t.Error("Expected at least one line in overlap, got none")
+	}
+
+	// The overlap should not be excessive - in this case it should be just the last line
+	// since adding the second-to-last line would exceed the 20% threshold
+	actualTokens := chunker.countTokens(strings.Join(overlapLines, "\n"))
+	maxAllowed := int(float64(10) * maxOverlapExcessRatio)
+	if actualTokens > maxAllowed && len(overlapLines) > 1 {
+		// If we have more than one line AND we exceeded the threshold, that's a problem
+		t.Errorf("Overlap tokens (%d) exceeded threshold (max %d) with %d lines", actualTokens, maxAllowed, len(overlapLines))
 	}
 }
 
