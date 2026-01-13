@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,13 +23,17 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
+	// Set up context with cancellation for logging
+	logCtx, logCancel := context.WithCancel(context.Background())
+	defer logCancel()
+
 	// Set up logging with file output
-	logFile, err := setupLogging(cfg)
+	logCloser, err := setupLogging(logCtx, cfg)
 	if err != nil {
 		log.Fatalf("Failed to setup logging: %v", err)
 	}
-	if logFile != nil {
-		defer logFile.Close()
+	if logCloser != nil {
+		defer logCloser.Close()
 	}
 
 	log.Printf("Configuration loaded successfully")
@@ -67,8 +72,96 @@ func main() {
 	}
 }
 
+// logManager handles log file rotation with proper synchronization
+type logManager struct {
+	mu          sync.Mutex
+	logFilePath string
+	logFile     *os.File
+	config      config.LoggingConfig
+}
+
+// newLogManager creates a new log manager
+func newLogManager(logFilePath string, cfg config.LoggingConfig) (*logManager, error) {
+	lm := &logManager{
+		logFilePath: logFilePath,
+		config:      cfg,
+	}
+	
+	// Open initial log file
+	if err := lm.openLogFile(); err != nil {
+		return nil, err
+	}
+	
+	return lm, nil
+}
+
+// openLogFile opens or reopens the log file
+func (lm *logManager) openLogFile() error {
+	logFile, err := os.OpenFile(lm.logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open log file: %w", err)
+	}
+	
+	lm.logFile = logFile
+	
+	// Update log output to write to both file and stderr
+	multiWriter := io.MultiWriter(os.Stderr, logFile)
+	log.SetOutput(multiWriter)
+	
+	return nil
+}
+
+// rotate performs log rotation and reopens the file
+func (lm *logManager) rotate() error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	
+	// Close current log file
+	if lm.logFile != nil {
+		lm.logFile.Close()
+	}
+	
+	// Rotate: rename current log file with timestamp
+	timestamp := time.Now().Format("2006-01-02-15-04-05")
+	backupPath := fmt.Sprintf("%s.%s", lm.logFilePath, timestamp)
+	
+	if err := os.Rename(lm.logFilePath, backupPath); err != nil {
+		// Reopen the original file even if rename failed
+		lm.openLogFile()
+		return fmt.Errorf("failed to rotate log file: %w", err)
+	}
+	
+	// Reopen log file with the original path
+	if err := lm.openLogFile(); err != nil {
+		return err
+	}
+	
+	log.Printf("Log file rotated: %s", backupPath)
+	
+	// Compress if enabled
+	if lm.config.Compress {
+		go compressLogFile(backupPath)
+	}
+	
+	// Clean up old backups
+	cleanOldLogFiles(filepath.Dir(lm.logFilePath), lm.config.MaxBackups, lm.config.MaxAgeDays)
+	
+	return nil
+}
+
+// Close closes the log file
+func (lm *logManager) Close() error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	
+	if lm.logFile != nil {
+		return lm.logFile.Close()
+	}
+	return nil
+}
+
 // setupLogging configures logging to write to both file and stderr
-func setupLogging(cfg *config.Config) (*os.File, error) {
+func setupLogging(ctx context.Context, cfg *config.Config) (io.Closer, error) {
 	// Set basic log format
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	log.SetPrefix("[semantic-search] ")
@@ -87,54 +180,43 @@ func setupLogging(cfg *config.Config) (*os.File, error) {
 	logFileName := "semantic-search.log"
 	logFilePath := filepath.Join(cfg.Logging.Directory, logFileName)
 
-	// Open log file (append mode)
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	// Create log manager
+	logMgr, err := newLogManager(logFilePath, cfg.Logging)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %w", err)
+		return nil, err
 	}
 
-	// Write to both file and stderr
-	multiWriter := io.MultiWriter(os.Stderr, logFile)
-	log.SetOutput(multiWriter)
+	// Start log rotation with context for proper cleanup
+	go rotateLogFileWithContext(ctx, logMgr)
 
-	// Log rotation: if file is too large, rotate it
-	go rotateLogFile(logFilePath, cfg.Logging)
-
-	return logFile, nil
+	return logMgr, nil
 }
 
-// rotateLogFile periodically checks and rotates log files based on configuration
-func rotateLogFile(logFilePath string, cfg config.LoggingConfig) {
+// rotateLogFileWithContext periodically checks and rotates log files based on configuration
+// It respects the context and exits gracefully when the context is cancelled
+func rotateLogFileWithContext(ctx context.Context, logMgr *logManager) {
 	ticker := time.NewTicker(1 * time.Hour) // Check every hour
 	defer ticker.Stop()
 
-	for range ticker.C {
-		fileInfo, err := os.Stat(logFilePath)
-		if err != nil {
-			continue
-		}
-
-		// Check if file size exceeds max size
-		maxSizeBytes := int64(cfg.MaxSizeMB) * 1024 * 1024
-		if fileInfo.Size() > maxSizeBytes {
-			// Rotate: rename current log file with timestamp
-			timestamp := time.Now().Format("2006-01-02-15-04-05")
-			backupPath := fmt.Sprintf("%s.%s", logFilePath, timestamp)
-
-			if err := os.Rename(logFilePath, backupPath); err != nil {
-				log.Printf("Failed to rotate log file: %v", err)
+	for {
+		select {
+		case <-ctx.Done():
+			// Context cancelled, exit gracefully
+			log.Println("Log rotation goroutine shutting down...")
+			return
+		case <-ticker.C:
+			fileInfo, err := os.Stat(logMgr.logFilePath)
+			if err != nil {
 				continue
 			}
 
-			// Compress if enabled
-			if cfg.Compress {
-				go compressLogFile(backupPath)
+			// Check if file size exceeds max size
+			maxSizeBytes := int64(logMgr.config.MaxSizeMB) * 1024 * 1024
+			if fileInfo.Size() > maxSizeBytes {
+				if err := logMgr.rotate(); err != nil {
+					log.Printf("Failed to rotate log file: %v", err)
+				}
 			}
-
-			// Clean up old backups
-			cleanOldLogFiles(filepath.Dir(logFilePath), cfg.MaxBackups, cfg.MaxAgeDays)
-
-			log.Printf("Log file rotated: %s", backupPath)
 		}
 	}
 }
