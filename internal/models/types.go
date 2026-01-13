@@ -66,7 +66,7 @@ const (
 
 // IndexJob represents a background indexing job
 type IndexJob struct {
-	mu           sync.Mutex    // protects FilesIndexed and Progress
+	mu           sync.Mutex    // mu protects the FilesIndexed and Progress fields from concurrent access
 	ID           string        `json:"id"`
 	RepoPath     string        `json:"repo_path"`
 	Status       IndexStatus   `json:"status"`

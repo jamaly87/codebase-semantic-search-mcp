@@ -280,8 +280,9 @@ func (idx *Indexer) processFilesInParallel(job *models.IndexJob, files []string,
 				job.UpdateProgress(int(current), float64(current)/float64(job.FilesTotal))
 
 				if current%10 == 0 || current == 1 {
+					_, progress := job.GetProgress()
 					log.Printf("[%s] Progress: %d/%d files (%.1f%%)",
-						job.ID, current, job.FilesTotal, float64(current)/float64(job.FilesTotal)*100)
+						job.ID, current, job.FilesTotal, progress*100)
 				}
 				
 				log.Printf("[%s] Worker %d: Completed processing %s", job.ID, workerID, filePath)
