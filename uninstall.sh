@@ -206,7 +206,7 @@ remove_images() {
         local images_removed=0
         local images_failed=0
 
-        echo "$all_images" | while read -r image; do
+        while read -r image; do
             if [ -n "$image" ]; then
                 echo "   Removing $image..."
                 if docker rmi -f "$image" 2>/dev/null; then
@@ -217,7 +217,7 @@ remove_images() {
                     ((images_failed++))
                 fi
             fi
-        done
+        done <<< "$all_images"
 
         # Also try to remove untagged/dangling images
         local dangling=$(docker images -f "dangling=true" -q 2>/dev/null | head -20)
@@ -228,7 +228,7 @@ remove_images() {
             done
         fi
 
-        echo -e "${GREEN}   ✓ Image removal complete${NC}"
+        echo -e "${GREEN}   ✓ Image removal complete (removed: $images_removed, failed: $images_failed)${NC}"
     else
         echo -e "${YELLOW}   ⊘ Skipped image removal${NC}"
     fi
